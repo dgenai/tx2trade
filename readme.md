@@ -66,7 +66,7 @@ Final user-facing action (`buy` or `sell`), enriched with wallet, amounts, and t
 
 ## Example Workflow
 
-1. Fetch a parsed transaction from Solana RPC.  
+1. Fetch one or more parsed transactions from Solana RPC.  
 2. Build the **edges and account index** using the visitor framework.  
 3. Run the strategy pipeline to infer **swap legs**.  
 4. Convert swap legs into **trade actions**.  
