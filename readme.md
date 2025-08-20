@@ -1,4 +1,4 @@
-# ts2trade
+# tx2trade
 
 ## Abstract
 
