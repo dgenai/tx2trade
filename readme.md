@@ -91,7 +91,7 @@ Example output:
 
 ```bash
 RPC_ENDPOINT="https://api.mainnet-beta.solana.com" \
-ts-node src/main.ts <TRANSACTION_SIGNATURE>
+ts-node src/main.ts <TRANSACTION_SIGNATURE1> <TRANSACTION_SIGNATURE2> ...
 ```
 
 This will:
@@ -104,7 +104,7 @@ This will:
 ```ts
 import { tx2trade } from "tx2trade";
 
-const actions = await tx2trade(signature, process.env.RPC_ENDPOINT!, {
+const actions = await tx2trade(signatures, process.env.RPC_ENDPOINT!, {
   debug: true,
   windowTotalFromOut: 500,
   requireAuthorityUserForOut: true,
