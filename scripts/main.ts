@@ -1,73 +1,142 @@
 #!/usr/bin/env ts-node
 
-import { Connection } from "@solana/web3.js";
 import clipboardy from "clipboardy";
+import dotenv from "dotenv";
 import { transactionToSwapLegs_SOLBridge } from "../src/core/transactionToSwapLegs.js";
 import { legsToTradeActions } from "../src/core/actions.js";
 import { inferUserWallet } from "../src/inferUserWallet.js";
-import dotenv from "dotenv";
-
-// "33ciuLsuBh1Fr7pPEjeh9Nrwgmz86UwQaq3G5XvMiqYhzMcpAEx7ByhWtmQiktxrnHUygZWdjGCmEzGxsqs1qVZH"; //OK
-// "65HzcNWJuwfyYgVCsWqCxrS3P256eHqDbexgpM381SUPSerP4ZcWGFPyfWnga2mRzXGonD1wB4gcNwy9q1GSwh5V"; //OK
-// "9yYpmLniuVj6D6sDEvGsD1YqP2D4BQG1JL55mdLDtv8zByBcY9fEyv8zBXbB2vxphoczHp1hj9yeNTkYkQZQM5P"; //OK
-// "3FNXSBn3DtjzYW5vta5AorfVbhghiKkMtgQ2bZ1MxGhEzL7PqewSFsiKq3gU3Zu7szfhkssEnQWF9nSwDNEuNtE7"; //OK
-// "3YgACS7s4BxCxUhTN7vgqFJ3NkUh1uVqaLeVUP49hnVK9A2Ph6FZrok9JQHFvRSWUpHW5WEyTXW3SjVUbfcTxS9Z"; // OK
-// "49T2pRgzsNr4NNLnf5zXgi7sKn1nWjMZCvCQG4XdfUoT6F7sDyVHUX1bVbhjfAzWLWXV7ox2UTC9TvU4aGqBreZA" // OK
-// "DYha16kPSysyRr4y5UkXzpAnviUgsxcUQZGkGqRALHSZxxXH54cPcD3YYgeKvCs3szYP1JZ9mNvsphfzkDLXq8H" //OK
 
 dotenv.config();
 
+/**
+ * Fetch parsed transactions in batch (chunked by 100 signatures).
+ */
+async function fetchParsedTransactionsBatch(
+  signatures: string[],
+  rpcEndpoint: string
+) {
+  const requests = signatures.map((sig, idx) => ({
+    jsonrpc: "2.0",
+    id: idx, // keep index to restore order later
+    method: "getTransaction",
+    params: [
+      sig,
+      {
+        maxSupportedTransactionVersion: 0,
+        commitment: "confirmed",
+        encoding: "jsonParsed",
+      },
+    ],
+  }));
+
+  const response = await fetch(rpcEndpoint, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(requests),
+  });
+
+  let results = await response.json();
+
+  if (results.data && Array.isArray(results.data)) {
+    results = results.data;
+  }
+  if (!Array.isArray(results)) {
+    results = [results];
+  }
+
+  // Build map: id -> result
+  const resultMap = new Map<number, any>();
+  for (const r of results) {
+    if (r && typeof r.id === "number") {
+      resultMap.set(r.id, r.result);
+    }
+  }
+
+  // Return transactions in the same order as input signatures
+  return signatures.map((_, idx) => resultMap.get(idx) || null);
+}
+
+
+/**
+ * Helper to split an array into smaller chunks.
+ */
+function chunkArray<T>(arr: T[], size: number): T[][] {
+  const chunks: T[][] = [];
+  for (let i = 0; i < arr.length; i += size) {
+    chunks.push(arr.slice(i, i + size));
+  }
+  return chunks;
+}
+
 async function main() {
   const RPC_ENDPOINT = process.env.RPC_ENDPOINT!;
-  const connection = new Connection(RPC_ENDPOINT, "confirmed");
-  const debug = true; 
-  // Retrieve CLI argument: transaction signature
-  const sig = process.argv[2];
-  if (!sig) {
-    console.error("❌ Usage: ts-node src/main.ts <signature>");
+  const debug = true;
+
+  // Get CLI arguments: list of signatures
+  const sigs = process.argv.slice(2);
+  if (sigs.length === 0) {
+    console.error("❌ Usage: ts-node src/main.ts <signature1> [signature2 ...]");
     process.exit(1);
   }
 
-  console.log(`🔎 Fetching transaction: ${sig} from RPC: ${RPC_ENDPOINT}`);
+  console.log(`🔎 Fetching ${sigs.length} transaction(s) from RPC: ${RPC_ENDPOINT}`);
 
-  // Fetch parsed transaction from Solana RPC
-  const tx = await connection.getParsedTransaction(sig, {
-    maxSupportedTransactionVersion: 0,
-    commitment: "confirmed",
-  });
+  const sigChunks = chunkArray(sigs, 100);
+  const allActions: any[] = [];
 
-  if (!tx) {
-    console.error("❌ Transaction not found:", sig);
-    return;
+  for (const chunk of sigChunks) {
+    const txs = await fetchParsedTransactionsBatch(chunk, RPC_ENDPOINT);
+
+    for (let i = 0; i < txs.length; i++) {
+      const tx = txs[i];
+      const sig = chunk[i];
+
+      if (!tx) {
+        console.warn(`⚠️ Transaction not found: ${sig}`);
+        continue;
+      }
+
+      try {
+        // Infer user wallet
+        const userWallet = inferUserWallet(tx);
+        if (debug) console.log("👤 Inferred wallet:", userWallet);
+
+        // Convert TX -> swap legs
+        const legs = transactionToSwapLegs_SOLBridge(tx, userWallet, {
+          windowTotalFromOut: 500,
+          requireAuthorityUserForOut: true,
+          debug,
+        });
+
+        if (debug) console.log(`🔗 TX ${sig}: ${legs.length} legs`);
+
+        // Legs -> trade actions
+        const actions = legsToTradeActions(legs, {
+          txHash: sig,
+          wallet: userWallet,
+        });
+
+        if (debug) console.log(`📊 TX ${sig}: ${actions.length} actions`);
+
+        allActions.push(...actions);
+      } catch (err) {
+        console.error(`❌ Error parsing TX ${sig}:`, err);
+      }
+    }
   }
-  console.log("✅ Transaction successfully retrieved.");
 
-  // Infer the user's wallet address involved in this transaction
-  const userWallet = inferUserWallet(tx);
-  console.log("👤 Inferred user wallet:", userWallet);
+  console.log("\n📊 Aggregated trade actions across all transactions:");
+  console.log(JSON.stringify(allActions, null, 2));
 
-  // Convert transaction data into a list of "swap legs"
-  // (each leg represents one atomic movement of assets within the swap/bridge)
-  const legs = transactionToSwapLegs_SOLBridge(tx, userWallet, {
-    windowTotalFromOut: 500,             // tolerance window for balance mismatches
-    requireAuthorityUserForOut: true,    // enforce user as authority for outgoing transfers
-    debug: debug,                         // enable verbose logging
-  });
-  console.log(`🔗 Detected ${legs.length} swap legs.`);
-
-  // Convert legs into higher-level "trade actions"
-  // (e.g., Buy, Sell, Bridge, Deposit, Withdraw)
-  const actions = legsToTradeActions(legs, {
-    txHash: sig,
-    wallet: userWallet,
-    debug: debug
-  });
-
-  console.log("📊 Trade actions derived from transaction:");
-  console.log(JSON.stringify(actions, null, 2));
+  // Copy to clipboard for convenience
+  try {
+    clipboardy.writeSync(JSON.stringify(allActions, null, 2));
+    console.log("📋 Results copied to clipboard.");
+  } catch {
+    console.log("⚠️ Could not copy results to clipboard.");
+  }
 }
 
-// Run the main function and catch any unhandled errors
 main().catch((err) => {
   console.error("❌ Unhandled error in main():", err);
 });
