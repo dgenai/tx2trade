@@ -79,8 +79,8 @@ Example output:
     "transactionHash": "4nUq...x3a",
     "transactionType": "buy",
     "walletAddress": "9abC...xyz",
-    "sold": { "address": "So11111111111111111111111111111111111111112", "symbol": "SOL", "amount": 1.25 },
-    "bought": { "address": "Dai1111111111111111111111111111111111111111", "amount": 150.0 }
+    "sold": { "address": "So11111111111111111111111111111111111111112", "symbol": "SOL", "name": "Solana", "amount": 1.25 },
+    "bought": { "address": "EcMzzinq67zZmxxxAcSSvCuRVfabdyE4jRMxxzqPgVfz", "symbol": "GAIN",  "name": "GAIN", "uri": "https://ipfs.io/ipfs/QmUpgJo7a2uizgewvQa6iPGDr1jZrRhEGDumfKJE7ugFpC", "amount": 150.0 }
   }
 ]
 ```
