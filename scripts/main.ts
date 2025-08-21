@@ -14,7 +14,7 @@ import clipboardy from "clipboardy";
 import dotenv from "dotenv";
 dotenv.config();
 
-import { SolanaRpcClient } from "../src/services/SolanaRpcClient.js";
+import { SolanaRpcClient, Commitment } from "../src/services/SolanaRpcClient.js";
 import { MetaplexMetadataService } from "../src/services/MetaplexMetadataService.js";
 
 import { transactionToSwapLegs_SOLBridge } from "../src/core/transactionToSwapLegs.js";
@@ -24,7 +24,6 @@ import { inferUserWallet } from "../src/core/inferUserWallet.js";
 import { ReportService } from "../src/services/ReportService.js";
 
 
-type Commitment = "processed" | "confirmed" | "finalized";
 
 // ---------- Simple flag parser ----------
 type CliFlags = {
@@ -109,59 +108,6 @@ Options:
 
 const debug = true;
 
-// --------- Pagination helper ----------
-async function fetchAllSignaturesWithPagination(
-  rpc: SolanaRpcClient,
-  address: string,
-  opts: {
-    total: number;                // total target to collect
-    pageSize?: number;            // max 1000
-    before?: string;
-    until?: string;
-    commitment?: Commitment;
-  }
-): Promise<string[]> {
-  const totalTarget = Math.max(1, opts.total);
-  const pageSize = Math.min(1000, Math.max(1, opts.pageSize ?? Math.min(1000, totalTarget)));
-  let before = opts.before;
-  const until = opts.until;
-  const commitment = opts.commitment;
-
-  const sigs: string[] = [];
-  const seen = new Set<string>();
-
-  while (sigs.length < totalTarget) {
-    const remaining = totalTarget - sigs.length;
-    const pageCap = Math.min(pageSize, remaining);
-
-    const page = await rpc.getSignaturesForAddress(
-      address,
-      pageCap,
-      before,
-      until,
-      commitment ?? "confirmed"
-    );
-
-    if (page.length === 0) break;
-
-    for (const s of page) {
-      if (!seen.has(s.signature)) {
-        sigs.push(s.signature);
-        seen.add(s.signature);
-        if (sigs.length >= totalTarget) break;
-      }
-    }
-
-    // Advance pagination anchor
-    const last = page[page.length - 1]?.signature;
-    if (!last || last === before) break; // no progress guard
-    before = last;
-
-    if (debug) console.log(`↪️  Pagination: collected ${sigs.length}/${totalTarget} (next before=${before})`);
-  }
-
-  return sigs;
-}
 
 async function main() {
   const RPC_ENDPOINT = process.env.RPC_ENDPOINT!;
@@ -206,7 +152,7 @@ async function main() {
       );
     }
 
-    sigs = await fetchAllSignaturesWithPagination(rpc, flags.address, {
+    sigs = await rpc.fetchAllSignaturesWithPagination(flags.address, {
       total,
       pageSize,
       before: flags.before,

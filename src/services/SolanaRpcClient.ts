@@ -1,5 +1,7 @@
 import { setTimeout as delay } from "timers/promises";
 
+export type Commitment = "processed" | "confirmed" | "finalized";
+
 export type SignatureInfo = {
   signature: string;
   slot: number;
@@ -63,7 +65,6 @@ export class SolanaRpcClient {
     this.requestCount = 0;
   }
 
-
   private async post<T = any>(body: any): Promise<T> {
     let attempt = 0;
     let lastErr: any;
@@ -71,7 +72,7 @@ export class SolanaRpcClient {
     while (attempt <= this.maxRetries) {
       try {
         this.requestCount++;
-        
+
         this.dbg("POST attempt", attempt + 1, "of", this.maxRetries + 1, { body });
 
         const controller = new AbortController();
@@ -245,5 +246,58 @@ export class SolanaRpcClient {
     const out = Array.isArray(result) ? (result as SignatureInfo[]) : [];
     this.dbg("Signatures fetched", { count: out.length });
     return out;
+  }
+
+  async fetchAllSignaturesWithPagination(
+    address: string,
+    opts: {
+      total: number;                // total target to collect
+      pageSize?: number;            // max 1000
+      before?: string;
+      until?: string;
+      commitment?: Commitment;
+    }
+  ): Promise<string[]> {
+
+    const totalTarget = Math.max(1, opts.total);
+    const pageSize = Math.min(1000, Math.max(1, opts.pageSize ?? Math.min(1000, totalTarget)));
+    let before = opts.before;
+    const until = opts.until;
+    const commitment = opts.commitment;
+  
+    const sigs: string[] = [];
+    const seen = new Set<string>();
+  
+    while (sigs.length < totalTarget) {
+      const remaining = totalTarget - sigs.length;
+      const pageCap = Math.min(pageSize, remaining);
+  
+      const page = await this.getSignaturesForAddress(
+        address,
+        pageCap,
+        before,
+        until,
+        commitment ?? "confirmed"
+      );
+  
+      if (page.length === 0) break;
+  
+      for (const s of page) {
+        if (!seen.has(s.signature)) {
+          sigs.push(s.signature);
+          seen.add(s.signature);
+          if (sigs.length >= totalTarget) break;
+        }
+      }
+  
+      // Advance pagination anchor
+      const last = page[page.length - 1]?.signature;
+      if (!last || last === before) break; // no progress guard
+      before = last;
+  
+      this.dbg(`↪️  Pagination: collected ${sigs.length}/${totalTarget} (next before=${before})`);
+    }
+  
+    return sigs;
   }
 }
