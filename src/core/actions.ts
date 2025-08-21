@@ -1,8 +1,9 @@
 import { SwapLeg, TradeAction, WSOL_MINT } from "../types.js";
+import { blockTimeToDate } from "../utils/helpers.js"
 
 export function legsToTradeActions(
   legs: SwapLeg[],
-  ctx: { txHash: string; wallet: string; debug?: boolean; log?: (...args: any[]) => void }
+  ctx: { txHash: string; wallet: string; blockTime: number; debug?: boolean; log?: (...args: any[]) => void }
 ): TradeAction[] {
   const { debug = false } = ctx;
   const log = ctx.log ?? ((...args: any[]) => { if (debug) console.debug("[legsToTradeActions]", ...args); });
@@ -11,12 +12,15 @@ export function legsToTradeActions(
 
   log(`Starting with ${legs.length} legs`);
 
+  const txDate = blockTimeToDate(ctx.blockTime); 
+
   for (const leg of legs) {
     log("Processing leg", leg);
 
     if (leg.soldMint === WSOL_MINT) {
       log("Detected BUY (sold WSOL)");
       actions.push({
+        transactionDate: txDate,
         transactionHash: ctx.txHash,
         transactionType: "buy",
         walletAddress: ctx.wallet,
@@ -26,6 +30,7 @@ export function legsToTradeActions(
     } else if (leg.boughtMint === WSOL_MINT) {
       log("Detected SELL (bought WSOL)");
       actions.push({
+        transactionDate: txDate,
         transactionHash: ctx.txHash,
         transactionType: "sell",
         walletAddress: ctx.wallet,
@@ -35,6 +40,7 @@ export function legsToTradeActions(
     } else {
       log("Detected TOKEN ↔ TOKEN swap");
       actions.push({
+        transactionDate: txDate,
         transactionHash: ctx.txHash,
         transactionType: "buy",
         walletAddress: ctx.wallet,

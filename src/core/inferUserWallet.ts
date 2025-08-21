@@ -1,5 +1,3 @@
-import { to58 } from "./types.js";
-
 /**
  * Try to infer the "real" user wallet from a Solana transaction.
  * 

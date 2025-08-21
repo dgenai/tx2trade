@@ -5,8 +5,9 @@ export type TradeAction = {
     transactionHash: string;
     transactionType: "buy" | "sell";
     walletAddress: string;
-    sold: { address: string; symbol?: string; amount: number };
-    bought: { address: string; symbol?: string; amount: number };
+    transactionDate:Date;
+    sold: { address?: string; amount?: number; symbol?: string; name?: string; uri?: string };
+    bought: { address?: string; amount?: number; symbol?: string; name?: string; uri?: string };
     };
     
     
@@ -32,7 +33,8 @@ export type TradeAction = {
     
     
     export type TokAccInfo = { mint: string; decimals?: number; owner?: string };
-    
+    export type TokenMeta = { name?: string; symbol?: string; uri?: string };
+
     
     export const WSOL_MINT = "So11111111111111111111111111111111111111112";
     
