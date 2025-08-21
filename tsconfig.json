@@ -1,15 +1,16 @@
 {
   "compilerOptions": {
     "target": "ES2020",
-    "module": "ESNext",
-    "moduleResolution": "Node",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
     "esModuleInterop": true,
-    "moduleDetection": "force",
-    "allowSyntheticDefaultImports": true,
     "strict": true,
-    "skipLibCheck": true
+    "skipLibCheck": true,
+    "outDir": "dist",
+    "rootDir": "src",
+    "declaration": true,             // génère les .d.ts
+    "declarationMap": true,          // source maps pour les types
+    "sourceMap": true                // source maps JS
   },
-  "ts-node": {
-    "esm": true
-  }
+  "include": ["src/**/*"]
 }

@@ -1,9 +1,9 @@
-import { SolanaRpcClient } from "../src/services/SolanaRpcClient.js";
-import { MetaplexMetadataService } from "../src/services/MetaplexMetadataService.js";
+import { SolanaRpcClient } from "./services/SolanaRpcClient.js";
+import { MetaplexMetadataService } from "./services/MetaplexMetadataService.js";
 
-import { transactionToSwapLegs_SOLBridge } from "../src/core/transactionToSwapLegs.js";
-import { legsToTradeActions } from "../src/core/actions.js";
-import { inferUserWallet } from "../src/core/inferUserWallet.js";
+import { transactionToSwapLegs_SOLBridge } from "./core/transactionToSwapLegs.js";
+import { legsToTradeActions } from "./core/actions.js";
+import { inferUserWallet } from "./core/inferUserWallet.js";
 import { chunkArray } from "./utils/helpers.js"; 
 
 /**
@@ -14,6 +14,10 @@ type Tx2TradeOpts = {
   windowTotalFromOut?: number;
   requireAuthorityUserForOut?: boolean;
 };
+
+
+export { SolanaRpcClient } from "./services/SolanaRpcClient.js";
+
 
 /**
  * Convert a list of Solana transaction signatures into enriched trade actions.
@@ -63,7 +67,7 @@ export async function tx2trade(
   const metaSvc = new MetaplexMetadataService(rpc);
 
   // Split signatures into batches of 100 to avoid RPC limits
-  const sigChunks = chunkArray(sigs, 100);
+  const sigChunks = chunkArray(sigs, 50);
   const allActions: any[] = [];
 
   for (const chunk of sigChunks) {
