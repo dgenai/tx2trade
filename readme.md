@@ -22,9 +22,16 @@ At a high level, the pipeline has three layers:
    - Token-to-Token swaps  
    - Aggregator or market maker routing  
 
-   Strategies are applied in a defined order, and the first one that matches reconstructs the swap intent.
+   Strategies are applied in a defined order for each pass. Any matching strategies consume edges to reconstruct swap legs. Subsequent strategies can still process the remaining edges. Iteration continues until no further legs are found or the maximum pass count is reached.
 
-3. **Trade Action Synthesis**  
+3. **Dust & Fees**  
+   When reconstructing swap legs, small residual amounts (*dust*) and transaction fees must be taken into account.  
+   - **Dust**: leftover token balances (e.g. a few lamports or token decimals) are ignored when inferring swap legs.  
+   - **Fees**: network fees, rent-exempt account creation, and aggregator/AMM fees can slightly skew input/output balances.  
+   
+   These adjustments ensure strategies focus on the significant trade flows without being confused by minor discrepancies.
+
+4. **Trade Action Synthesis**  
    Swap legs are finally converted into **TradeActions**:  
    - `buy` or `sell` relative to the user wallet  
    - With explicit amounts, token addresses, and the transaction hash  
@@ -39,9 +46,10 @@ This three-step model transforms raw blockchain data into actionable, structured
   - Parse Solana programs into normalized edges (e.g. SPL Token transfers, ATA creation).  
   - Easily extensible to support more programs.  
 
-- **Strategies**  
-  - Apply domain heuristics to detect swaps, hubs, and routing patterns.  
-  - Encapsulate rules for Token-to-Token, SOL bridging, and aggregator-based flows.  
+- **Strategies**
+  - Apply domain heuristics to detect swaps, hubs, and routing patterns.
+  - Encapsulate rules for Token-to-Token, SOL bridging, and aggregator-based flows.
+  - Executed in a fixed priority order, in multiple passes, until no further legs can be reconstructed. 
 
 - **Utilities**  
   - Helpers to detect WSOL hubs, correlate edges, and simplify transaction graph analysis.  
@@ -91,14 +99,9 @@ Example output:
 
 ```bash
 RPC_ENDPOINT="https://api.mainnet-beta.solana.com" \
-ts-node src/main.ts <TRANSACTION_SIGNATURE1> <TRANSACTION_SIGNATURE2> ...
+tx2trade src/main.ts <TRANSACTION_SIGNATURE1> <TRANSACTION_SIGNATURE2> ...
+tx2trade --help
 ```
-
-This will:
-
-* Fetch the transaction
-* Analyze it
-* Print the reconstructed trade actions in JSON
 
 ### Library
 ```ts

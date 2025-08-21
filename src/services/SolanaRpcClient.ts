@@ -1,5 +1,13 @@
 import { setTimeout as delay } from "timers/promises";
 
+export type SignatureInfo = {
+  signature: string;
+  slot: number;
+  blockTime?: number | null;
+  err?: any;
+  memo: string | null;
+};
+
 export type RpcRequest = {
   jsonrpc: "2.0";
   id: number | string;
@@ -10,19 +18,15 @@ export type RpcRequest = {
 export type RpcClientOptions = {
   endpoint: string;
   timeoutMs?: number;
-  maxRetries?: number;      // Retries on network errors / 429 / 5xx
-  retryBackoffMs?: number;  // Base backoff duration (ms), exponential growth
+  maxRetries?: number;
+  retryBackoffMs?: number;
   defaultCommitment?: "processed" | "confirmed" | "finalized";
+  debug?: boolean;
+  log?: (...args: any[]) => void;
 };
 
 /**
  * Lightweight JSON-RPC client for Solana.
- *
- * Features:
- *  - Supports POST with timeout and exponential backoff retry logic.
- *  - Provides helpers for common RPC calls (getTransaction, getMultipleAccounts).
- *  - Handles both standard RPC responses and vendor-specific wrappers (e.g. Helius).
- *  - Ensures batch order is preserved when fetching multiple items.
  */
 export class SolanaRpcClient {
   private endpoint: string;
@@ -30,6 +34,10 @@ export class SolanaRpcClient {
   private maxRetries: number;
   private retryBackoffMs: number;
   private defaultCommitment: RpcClientOptions["defaultCommitment"];
+  private debug: boolean;
+  private log: (...args: any[]) => void;
+
+  private requestCount = 0;
 
   constructor(opts: RpcClientOptions) {
     this.endpoint = opts.endpoint;
@@ -37,18 +45,35 @@ export class SolanaRpcClient {
     this.maxRetries = opts.maxRetries ?? 3;
     this.retryBackoffMs = opts.retryBackoffMs ?? 300;
     this.defaultCommitment = opts.defaultCommitment ?? "confirmed";
+
+    // cohérent avec ton premier fichier
+    this.debug = opts.debug ?? true;
+    this.log = opts.log ?? (() => {});
   }
 
-  /**
-   * POST JSON body to the Solana RPC endpoint with timeout + retries.
-   * Retries are triggered on network errors, HTTP 429, or 5xx responses.
-   */
+  private dbg = (...args: any[]) => {
+    if (this.debug) this.log(`[SolanaRpcClient]`, ...args);
+  };
+
+  getRequestsCount() {
+    return this.requestCount;
+  }
+
+  resetRequestsCount() {
+    this.requestCount = 0;
+  }
+
+
   private async post<T = any>(body: any): Promise<T> {
     let attempt = 0;
     let lastErr: any;
 
     while (attempt <= this.maxRetries) {
       try {
+        this.requestCount++;
+        
+        this.dbg("POST attempt", attempt + 1, "of", this.maxRetries + 1, { body });
+
         const controller = new AbortController();
         const t = setTimeout(() => controller.abort(), this.timeoutMs);
 
@@ -62,44 +87,40 @@ export class SolanaRpcClient {
         clearTimeout(t);
 
         if (!res.ok) {
-          // Retry on 429 or 5xx
+          this.dbg("Non-OK response", res.status);
           if (res.status >= 500 || res.status === 429) {
             throw new Error(`HTTP ${res.status}`);
           }
-          // Non-retryable 4xx
           const text = await res.text();
           throw new Error(`HTTP ${res.status}: ${text}`);
         }
 
-        return await res.json();
+        const json = await res.json();
+        this.dbg("Response received", { json });
+        return json;
       } catch (err) {
         lastErr = err;
+        this.dbg("Error on attempt", attempt + 1, err);
+
         if (attempt === this.maxRetries) break;
 
-        // Exponential backoff before retry
         const ms = this.retryBackoffMs * Math.pow(2, attempt);
+        this.dbg("Retrying after backoff", ms, "ms");
         await delay(ms);
         attempt++;
       }
     }
 
+    this.dbg("All retries failed", lastErr);
     throw lastErr;
   }
 
-  /**
-   * Batch fetch parsed transactions (jsonParsed) by signature.
-   *
-   * - Preserves order of input signatures.
-   * - Handles vendor-specific wrappers (Helius, etc).
-   * - Returns `null` for missing transactions.
-   *
-   * @param signatures - Transaction signatures
-   * @param maxSupportedTransactionVersion - Upper bound for decoding versioned transactions
-   */
   async getTransactionsParsedBatch(
     signatures: string[],
     maxSupportedTransactionVersion = 0
   ): Promise<any[]> {
+    this.dbg("Fetching parsed transactions batch", { count: signatures.length });
+
     const batch: RpcRequest[] = signatures.map((sig, idx) => ({
       jsonrpc: "2.0",
       id: idx,
@@ -116,8 +137,8 @@ export class SolanaRpcClient {
 
     let results: any = await this.post(batch);
 
-    // Some providers (e.g. Helius) wrap batch responses in a `data` field
     if (results?.data && Array.isArray(results.data)) {
+      this.dbg("Detected vendor-specific wrapper (data field)");
       results = results.data;
     }
     if (!Array.isArray(results)) results = [results];
@@ -128,30 +149,24 @@ export class SolanaRpcClient {
         byId.set(r.id, r.result ?? null);
       }
     }
-    return signatures.map((_, i) => byId.get(i) ?? null);
+
+    const final = signatures.map((_, i) => byId.get(i) ?? null);
+    this.dbg("Batch result assembled", { found: final.filter(Boolean).length });
+    return final;
   }
 
-  /**
-   * Fetch multiple accounts in base64 encoding.
-   *
-   * Strategy:
-   *  - Attempt `getMultipleAccounts` for a chunk of addresses.
-   *  - If unsupported or fails, fallback to batching `getAccountInfo` calls.
-   *
-   * @param addresses - Account addresses
-   * @param chunkSize - Max accounts per request (default: 100)
-   * @returns Map of address -> account data (or null if not found)
-   */
   async getAccountsBase64(
     addresses: string[],
     chunkSize = 100
   ): Promise<Record<string, any | null>> {
+    this.dbg("Fetching accounts (base64)", { total: addresses.length, chunkSize });
+
     const out: Record<string, any | null> = {};
 
     for (let i = 0; i < addresses.length; i += chunkSize) {
       const chunk = addresses.slice(i, i + chunkSize);
+      this.dbg("Processing chunk", { from: i, to: i + chunk.length });
 
-      // Preferred method: getMultipleAccounts
       try {
         const multiReq: RpcRequest = {
           jsonrpc: "2.0",
@@ -165,13 +180,13 @@ export class SolanaRpcClient {
           multiRes.result.value.forEach((acc: any, idx: number) => {
             out[chunk[idx]] = acc ?? null;
           });
-          continue; // skip fallback
+          this.dbg("getMultipleAccounts success", { count: chunk.length });
+          continue;
         }
-      } catch {
-        // Fallback to individual batch below
+      } catch (err) {
+        this.dbg("getMultipleAccounts failed, falling back", err);
       }
 
-      // Fallback method: batch getAccountInfo
       const batch: RpcRequest[] = chunk.map((addr, idx) => ({
         jsonrpc: "2.0",
         id: idx,
@@ -188,9 +203,47 @@ export class SolanaRpcClient {
           byId.set(r.id, r.result?.value ?? null);
         }
       }
+
       chunk.forEach((addr, idx) => (out[addr] = byId.get(idx) ?? null));
+      this.dbg("Fallback getAccountInfo success", { count: chunk.length });
     }
 
+    this.dbg("Final accounts result", { count: Object.keys(out).length });
+    return out;
+  }
+
+  async getSignaturesForAddress(
+    address: string,
+    limit = 1000,
+    before?: string,
+    until?: string,
+    commitment: "processed" | "confirmed" | "finalized" =
+      this.defaultCommitment as "processed" | "confirmed" | "finalized"
+  ): Promise<SignatureInfo[]> {
+    this.dbg("Fetching signatures for address", { address, limit, before, until });
+
+    const params: any = [
+      address,
+      {
+        limit,
+        commitment,
+      },
+    ];
+    if (before) params[1].before = before;
+    if (until) params[1].until = until;
+
+    const req: RpcRequest = {
+      jsonrpc: "2.0",
+      id: "gsfa",
+      method: "getSignaturesForAddress",
+      params,
+    };
+
+    const res = await this.post<any>(req);
+    const result = res?.data?.result ?? res?.result;
+
+    const out = Array.isArray(result) ? (result as SignatureInfo[]) : [];
+    this.dbg("Signatures fetched", { count: out.length });
     return out;
   }
 }

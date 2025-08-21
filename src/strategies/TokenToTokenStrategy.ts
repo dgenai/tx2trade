@@ -3,7 +3,6 @@ import { LegStrategy } from "./LegStrategy.js";
 
 const WSOL_MINT = "So11111111111111111111111111111111111111112";
 
-// Set des stablecoins que tu considères comme "base currency"
 const STABLES = new Set([
   "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", // USDC
   "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB", // USDT
@@ -43,7 +42,7 @@ export class TokenToTokenStrategy implements LegStrategy {
 
       if (e.mint === WSOL_MINT) {
         dbg("Skipping WSOL edge", { seq: e.seq, mint: e.mint, amount: e.amount });
-        continue; // ignore WSOL wrap/unwrap
+        continue; 
       }
 
       let delta = netByMint.get(e.mint) ?? 0n;

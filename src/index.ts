@@ -38,7 +38,7 @@ type Tx2TradeOpts = {
  * @param opts - Optional parsing and debug configuration
  * @returns Array of enriched trade actions across all transactions
  */
-export async function txs2trades(
+export async function tx2trade(
   sigs: string[],
   rpcEndpoint: string,
   opts: Tx2TradeOpts = {}
@@ -50,12 +50,13 @@ export async function txs2trades(
   } = opts;
 
   // Initialize Solana RPC client with retry & timeout strategy
-  const rpc = new SolanaRpcClient({
+   const rpc = new SolanaRpcClient({
     endpoint: rpcEndpoint,
     timeoutMs: 25_000,
     maxRetries: 3,
     retryBackoffMs: 300,
     defaultCommitment: "confirmed",
+    log: (...args: any[]) => console.log(...args)
   });
 
   // Service for fetching and enriching with Metaplex token metadata

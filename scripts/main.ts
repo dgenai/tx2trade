@@ -1,29 +1,13 @@
-#!/usr/bin/env ts-node 
+#!/usr/bin/env ts-node
 
 /**
- * Main entrypoint for parsing Solana transactions into trade actions with enriched metadata.
+ * CLI: parse Solana transactions into trade actions with enriched metadata.
  *
- * Workflow:
- *  1. Load environment variables (expects `RPC_ENDPOINT`).
- *  2. Accept transaction signatures from CLI arguments.
- *  3. Fetch and parse transactions in batches via `SolanaRpcClient`.
- *  4. Infer the likely user wallet involved in each transaction.
- *  5. Transform raw transactions into swap legs (via `transactionToSwapLegs_SOLBridge`).
- *  6. Convert legs into high-level trade actions (`legsToTradeActions`).
- *  7. Enrich trade actions with token metadata from the Metaplex service.
- *  8. Aggregate and output the enriched actions (optionally copy to clipboard).
- *
- * Notes:
- *  - Batches are processed in chunks of 100 signatures to reduce RPC load.
- *  - Debug logs provide visibility at each step (wallet inference, leg extraction, actions count, metadata enrichment).
- *  - Gracefully handles missing or unparsable transactions without stopping execution.
- *  - Clipboard export is optional and wrapped in a try/catch to avoid runtime crashes on unsupported systems.
- *
- * Usage:
- *    ts-node src/app/main.ts <signature1> [signature2 ...]
- *
- * Example:
- *    ts-node src/app/main.ts 3ms3r4f... 8kx9sd...
+ * New (pagination):
+ *  - --address mode supports fetching >1000 signatures via paginated calls.
+ *  - Flags:
+ *      --total <n>      Target total signatures to retrieve (default 3000)
+ *      --pageSize <n>   Page size per RPC call, 1..1000 (default: min(1000, total))
  */
 
 import clipboardy from "clipboardy";
@@ -37,55 +21,237 @@ import { transactionToSwapLegs_SOLBridge } from "../src/core/transactionToSwapLe
 import { legsToTradeActions } from "../src/core/actions.js";
 import { inferUserWallet } from "../src/core/inferUserWallet.js";
 
+import { ReportService } from "../src/services/ReportService.js";
+
+
+type Commitment = "processed" | "confirmed" | "finalized";
+
+// ---------- Simple flag parser ----------
+type CliFlags = {
+  sigs?: string[];
+  address?: string;
+  limit?: number;         // kept for backward compat (single page); prefer --total now
+  total?: number;         // total signatures to fetch across pages
+  pageSize?: number;      // per-page RPC size (max 1000)
+  before?: string;
+  until?: string;
+  commitment?: Commitment;
+  help?: boolean;
+  report?: boolean | string;  // true or path
+  out?: string;               // alias for the path
+
+};
+
+function parseArgs(argv: string[]): { flags: CliFlags; positionals: string[] } {
+  const flags: CliFlags = {};
+  const positionals: string[] = [];
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    if (a === "--help" || a === "-h") flags.help = true;
+    else if (a === "--sigs" || a === "-s") {
+      const v = argv[++i];
+      if (v) flags.sigs = v.split(",").map(s => s.trim()).filter(Boolean);
+    } else if (a === "--address" || a === "-a") flags.address = argv[++i];
+    else if (a === "--limit" || a === "-l") { const v = Number(argv[++i]); if (!Number.isNaN(v)) flags.limit = v; }
+    else if (a === "--total") { const v = Number(argv[++i]); if (!Number.isNaN(v)) flags.total = v; }
+    else if (a === "--pageSize") { const v = Number(argv[++i]); if (!Number.isNaN(v)) flags.pageSize = v; }
+    else if (a === "--before") flags.before = argv[++i];
+    else if (a === "--until") flags.until = argv[++i];
+    else if (a === "--commitment" || a === "-c") {
+      const v = argv[++i] as Commitment;
+      if (v === "processed" || v === "confirmed" || v === "finalized") flags.commitment = v;
+      else console.warn(`⚠️ Unknown commitment "${v}", ignoring.`);
+    } else if (a === "--report") {
+      // --report (bool) OU --report <chemin>
+      const peek = argv[i + 1];
+      if (peek && !peek.startsWith("-")) {
+        flags.report = peek;
+        i++;
+      } else {
+        flags.report = true;
+      }
+    } else if (a === "--out") {
+      flags.out = argv[++i];
+    } else if (a.startsWith("-")) {
+      console.warn(`⚠️ Unknown flag "${a}", ignoring.`);
+    } else {
+      positionals.push(a);
+    }
+  }
+  return { flags, positionals };
+}
+
+
+function printHelp(): void {
+  console.log(`
+Usage:
+  # Direct signatures (positional or --sigs)
+  ts-node src/app/main.ts <sig1> [sig2 ...]
+  ts-node src/app/main.ts --sigs sig1,sig2,sig3
+
+  # Fetch by address (with pagination)
+  ts-node src/app/main.ts --address <PUBKEY> [--total 3000] [--pageSize 1000] [--before <sig>] [--until <sig>] [--commitment confirmed]
+
+Options:
+  -s, --sigs         Comma-separated list of signatures
+  -a, --address      Address to fetch signatures from
+  -l, --limit        Single-page cap (max 1000). Prefer --total for pagination.
+      --total        Total signatures to collect across pages (default: 3000)
+      --pageSize     Page size per RPC call (1..1000). Default: min(1000, total)
+      --before       Return signatures before this one (exclusive)
+      --until        Return signatures until this one (inclusive)
+  -c, --commitment   processed | confirmed | finalized (default: client setting)
+  -h, --help         Show help
+  --report [file]  Generate an HTML report (optional output path)
+  --out <file>     Explicit output path for the report (overrides --report file)
+`);
+}
+
 const debug = true;
 
-async function main() {
-  // Load the RPC endpoint from environment variables
-  const RPC_ENDPOINT = process.env.RPC_ENDPOINT!;
-  const sigs = process.argv.slice(2);
+// --------- Pagination helper ----------
+async function fetchAllSignaturesWithPagination(
+  rpc: SolanaRpcClient,
+  address: string,
+  opts: {
+    total: number;                // total target to collect
+    pageSize?: number;            // max 1000
+    before?: string;
+    until?: string;
+    commitment?: Commitment;
+  }
+): Promise<string[]> {
+  const totalTarget = Math.max(1, opts.total);
+  const pageSize = Math.min(1000, Math.max(1, opts.pageSize ?? Math.min(1000, totalTarget)));
+  let before = opts.before;
+  const until = opts.until;
+  const commitment = opts.commitment;
 
-  if (!RPC_ENDPOINT) throw new Error("RPC_ENDPOINT is missing");
-  if (sigs.length === 0) {
-    console.error("❌ Usage: ts-node src/app/main.ts <signature1> [signature2 ...]");
-    process.exit(1);
+  const sigs: string[] = [];
+  const seen = new Set<string>();
+
+  while (sigs.length < totalTarget) {
+    const remaining = totalTarget - sigs.length;
+    const pageCap = Math.min(pageSize, remaining);
+
+    const page = await rpc.getSignaturesForAddress(
+      address,
+      pageCap,
+      before,
+      until,
+      commitment ?? "confirmed"
+    );
+
+    if (page.length === 0) break;
+
+    for (const s of page) {
+      if (!seen.has(s.signature)) {
+        sigs.push(s.signature);
+        seen.add(s.signature);
+        if (sigs.length >= totalTarget) break;
+      }
+    }
+
+    // Advance pagination anchor
+    const last = page[page.length - 1]?.signature;
+    if (!last || last === before) break; // no progress guard
+    before = last;
+
+    if (debug) console.log(`↪️  Pagination: collected ${sigs.length}/${totalTarget} (next before=${before})`);
   }
 
-  // Initialize Solana RPC client and Metaplex metadata service
+  return sigs;
+}
+
+async function main() {
+  const RPC_ENDPOINT = process.env.RPC_ENDPOINT!;
+  if (!RPC_ENDPOINT) throw new Error("RPC_ENDPOINT is missing");
+
+  const { flags, positionals } = parseArgs(process.argv.slice(2));
+  if (flags.help) {
+    printHelp();
+    process.exit(0);
+  }
+
+  // Decide input mode
+  let sigs: string[] | undefined;
+
+  if (flags.sigs?.length) {
+    sigs = flags.sigs;
+  } else if (positionals.length) {
+    sigs = positionals;
+  }
+
   const rpc = new SolanaRpcClient({
     endpoint: RPC_ENDPOINT,
     timeoutMs: 25_000,
     maxRetries: 3,
     retryBackoffMs: 300,
     defaultCommitment: "confirmed",
+    log: (...args: any[]) => console.log(...args)
   });
   const metaSvc = new MetaplexMetadataService(rpc);
 
-  if (debug) console.log(`🔎 Fetching ${sigs.length} transaction(s) from RPC: ${RPC_ENDPOINT}`);
+  
+  // Address mode with pagination
+  if (!sigs && flags.address) {
+    // Backward-compat: if --limit provided without --total, treat it as total
+    const total = Math.max(1, flags.total ?? flags.limit ?? 3000);
+    const pageSize = flags.pageSize;
+
+    if (debug) {
+      console.log(
+        `🔎 Fetching up to ${total} signatures for ${flags.address} ` +
+        `(pageSize=${pageSize ?? Math.min(1000, total)}, commitment=${flags.commitment ?? "confirmed"})`
+      );
+    }
+
+    sigs = await fetchAllSignaturesWithPagination(rpc, flags.address, {
+      total,
+      pageSize,
+      before: flags.before,
+      until: flags.until,
+      commitment: flags.commitment,
+    });
+
+    if (debug) console.log(`📥 Retrieved ${sigs.length} signature(s) from address with pagination.`);
+  }
+
+  if (!sigs || sigs.length === 0) {
+    printHelp();
+    console.error("❌ No signatures provided and no address-based results. Nothing to do.");
+    process.exit(1);
+  }
+
+  if (debug) console.log(`🔎 Processing ${sigs.length} transaction(s) from RPC: ${RPC_ENDPOINT}`);
 
   const allActions: any[] = [];
 
-  // Process signatures in batches of 100 to optimize RPC calls
-  for (let i = 0; i < sigs.length; i += 100) {
-    const chunk = sigs.slice(i, i + 100);
+  // Batch TX fetch in chunks of 100
+  for (let i = 0; i < sigs.length; i += 50) {
+    const chunk = sigs.slice(i, i + 50);
     const txs = await rpc.getTransactionsParsedBatch(chunk, 0);
 
-    // Iterate through each transaction in the current batch
     for (let j = 0; j < txs.length; j++) {
       const tx = txs[j];
+    //  clipboardy.writeSync(JSON.stringify(tx, null, 2));
+
       const sig = chunk[j];
 
-      // Skip missing transactions
+      if (tx.meta.err) {
+        if (debug) console.warn(`⚠️ Transaction failed: ${sig}`);
+        continue;
+      }
+
       if (!tx) {
         if (debug) console.warn(`⚠️ Transaction not found: ${sig}`);
         continue;
       }
 
       try {
-        // Step 1: Infer the main wallet involved in the transaction
         const userWallet = inferUserWallet(tx);
         if (debug) console.log("👤 Inferred wallet:", userWallet);
 
-        // Step 2: Extract swap legs from the transaction
         const legs = transactionToSwapLegs_SOLBridge(tx, userWallet, {
           windowTotalFromOut: 500,
           requireAuthorityUserForOut: true,
@@ -93,7 +259,6 @@ async function main() {
         });
         if (debug) console.log(`🔗 TX ${sig}: ${legs.length} legs`);
 
-        // Step 3: Convert legs into trade actions
         const actions = legsToTradeActions(legs, {
           txHash: sig,
           wallet: userWallet,
@@ -101,7 +266,6 @@ async function main() {
         });
         if (debug) console.log(`📊 TX ${sig}: ${actions.length} actions`);
 
-        // Aggregate all actions for later enrichment
         allActions.push(...actions);
       } catch (err) {
         console.error(`❌ Error parsing TX ${sig}:`, err);
@@ -109,31 +273,49 @@ async function main() {
     }
   }
 
-  // Debug output: aggregated trade actions before metadata enrichment
   if (debug) {
     console.log("\n📊 Aggregated trade actions across all transactions:");
     console.log(JSON.stringify(allActions, null, 2));
   }
 
-  // Fetch token metadata and enrich trade actions
   const metaMap = await metaSvc.fetchTokenMetadataMapFromActions(allActions);
   const enriched = metaSvc.enrichActionsWithMetadata(allActions, metaMap);
 
   if (debug) {
     console.log("\n🧬 Actions + metadata:");
     console.log(JSON.stringify(enriched, null, 2));
+
+    console.log("Total RPC requests:", rpc.getRequestsCount());
+
+
   }
 
-  // Try to copy results to clipboard for convenience
-  try {
-    // clipboardy.writeSync(JSON.stringify(enriched, null, 2));
+  // ----- REPORT (HTML) -----
+const wantReport = !!flags.report;
+if (wantReport) {
+  const outFile =
+    (typeof flags.report === "string" ? flags.report : undefined) ||
+    flags.out ||
+    "solana-trades-report.html";
+
+  const report = new ReportService();
+  await report.writeHtml(
+    // Cast minimal si tes actions ont déjà ces champs
+    enriched as any,
+    { outFile, title: "Solana Trades Report" }
+  );
+
+  console.log(`📄 Report written to: ${outFile}`);
+}
+
+ /*  try {
+   clipboardy.writeSync(JSON.stringify(enriched, null, 2));
     if (debug) console.log("📋 Results copied to clipboard.");
   } catch {
     if (debug) console.log("⚠️ Could not copy results to clipboard.");
-  }
+  } */
 }
 
-// Global error handler for the async main()
 main().catch((err) => {
   console.error("❌ Unhandled error in main():", err);
 });

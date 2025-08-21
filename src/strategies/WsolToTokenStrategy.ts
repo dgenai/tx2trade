@@ -8,10 +8,16 @@ export class WsolToTokenStrategy implements LegStrategy {
     edges: TransferEdge[],
     userTokenAccounts: Set<string>,
     userWallet: string,
-    opts?: { windowTotalFromOut?: number; debug?: boolean; log?: (...args: any[]) => void }
+    opts?: {
+      windowTotalFromOut?: number;   
+      windowSolAfterIn?: number;    
+      debug?: boolean;
+      log?: (...args: any[]) => void;
+    }
   ): SwapLeg[] {
     const {
       windowTotalFromOut = 400,
+      windowSolAfterIn = 50,  
       debug = true,
       log = (..._args: any[]) => {},
     } = opts ?? {};
@@ -21,7 +27,7 @@ export class WsolToTokenStrategy implements LegStrategy {
     dbg("Starting strategy with", edges.length, "edges");
 
     const userSolOuts = edges.filter(
-      (e) => e.mint === WSOL_MINT && e.authority === userWallet && userTokenAccounts.has(e.source)
+      (e) => e.mint === WSOL_MINT && e.authority === userWallet
     );
     const userTokenIns = edges.filter(
       (e) => e.mint !== WSOL_MINT && userTokenAccounts.has(e.destination) && e.authority !== userWallet
@@ -41,16 +47,30 @@ export class WsolToTokenStrategy implements LegStrategy {
     const usedIn = new Set<number>();
 
     for (const inn of userTokenIns) {
-      const candidates = userSolOuts.filter(
-        (out) => out.seq < inn.seq && inn.seq - out.seq <= windowTotalFromOut
-      );
+   
+      const before = userSolOuts.filter((out) => {
+        const d = inn.seq - out.seq;
+        return d > 0 && d <= windowTotalFromOut;
+      });
 
-      dbg("Candidates for inn", { innSeq: inn.seq, count: candidates.length });
+  
+      const after = userSolOuts.filter((out) => {
+        const d = out.seq - inn.seq;
+        return d > 0 && d <= windowSolAfterIn;
+      });
 
-      if (!candidates.length) continue;
+      const candidates = before.length ? before : after;
+
+      dbg("Candidates for inn", {
+        innSeq: inn.seq,
+        before: before.length,
+        after: after.length,
+        picked: candidates.length,
+      });
+
+      if (!candidates.length || usedIn.has(inn.seq)) continue;
 
       const bestOut = candidates.reduce((a, b) => (a.amount >= b.amount ? a : b));
-      if (usedIn.has(inn.seq)) continue;
 
       legs.push({
         soldMint: WSOL_MINT,
@@ -65,8 +85,6 @@ export class WsolToTokenStrategy implements LegStrategy {
       dbg("Leg created", {
         soldAmount: bestOut.amount,
         boughtAmount: inn.amount,
-        soldMint: WSOL_MINT,
-        boughtMint: inn.mint,
         outSeq: bestOut.seq,
         inSeq: inn.seq,
       });
