@@ -1,14 +1,17 @@
 import { TokAccInfo, TransferEdge } from "../types.js";
 
+// InstructionVisitor.ts
 export interface VisitContext {
-  seq: { v: number };
-  depth: number; // 0 = top, 1 = inner
-  accountIndex: Map<string, TokAccInfo>;
-  pushEdge: (e: TransferEdge) => void;
-  noteAccount: (addr: string, info: Partial<TokAccInfo>) => void;
-  debug?: boolean;
-  log?: (...args: any[]) => void;
-}
+    seq: { v: number };
+    depth: number;
+    accountIndex: Map<string, TokAccInfo>;
+    pushEdge: (e: TransferEdge) => void;
+    noteAccount: (addr: string, info: Partial<TokAccInfo>) => void;
+    debug?: boolean;
+    log?: (...args: any[]) => void;
+  
+    groups?: Array<{ index: number; startSeq: number; endSeq: number; outerProgramId?: string }>;
+  }
 
 export interface InstructionVisitor {
   supports(ix: any): boolean;
@@ -27,27 +30,38 @@ export interface InstructionVisitor {
  * Logging:
  *  - Controlled by ctx.debug / ctx.log
  */
-export function applyVisitors(
-  tx: any,
-  visitors: InstructionVisitor[],
-  ctx: VisitContext
-) {
-  const log = ctx.log ?? ((..._args: any[]) => {});
-
-  // Step 1: Top-level instructions
-  for (const ix of tx?.transaction?.message?.instructions ?? []) {
-    const v = visitors.find((vv) => vv.supports(ix)) ?? visitors[visitors.length - 1];
-    log("Top-level instruction handled by", v.constructor?.name ?? "UnknownVisitor");
-    v.visit(ix, ctx);
-  }
-
-  // Step 2: Inner instructions
-  for (const inner of tx?.meta?.innerInstructions ?? []) {
-    for (const ix of inner?.instructions ?? []) {
-      ctx.depth = 1;
+export function applyVisitors(tx: any, visitors: InstructionVisitor[], ctx: VisitContext) {
+    const log = ctx.log ?? ((..._args: any[]) => {});
+  
+    // 1) top-level
+    for (const ix of tx?.transaction?.message?.instructions ?? []) {
       const v = visitors.find((vv) => vv.supports(ix)) ?? visitors[visitors.length - 1];
-      log("Inner instruction handled by", v.constructor?.name ?? "UnknownVisitor");
+      log("Top-level instruction handled by", v.constructor?.name ?? "UnknownVisitor");
       v.visit(ix, ctx);
     }
+  
+    // 2) inner groups
+    const outers = tx?.transaction?.message?.instructions ?? [];
+    ctx.groups = ctx.groups ?? [];
+  
+    for (const inner of tx?.meta?.innerInstructions ?? []) {
+      const start = ctx.seq.v;
+      ctx.depth = 1;
+  
+      for (const ix of inner?.instructions ?? []) {
+        const v = visitors.find((vv) => vv.supports(ix)) ?? visitors[visitors.length - 1];
+        log("Inner instruction handled by", v.constructor?.name ?? "UnknownVisitor");
+        v.visit(ix, ctx);
+      }
+  
+      const end = ctx.seq.v;
+      const outerIx = outers[inner.index];
+      ctx.groups.push({
+        index: inner.index,
+        startSeq: start,
+        endSeq: end,
+        outerProgramId: outerIx?.programId,
+      });
+    }
   }
-}
+  

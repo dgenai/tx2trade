@@ -8,6 +8,9 @@
  *  - Flags:
  *      --total <n>      Target total signatures to retrieve (default 3000)
  *      --pageSize <n>   Page size per RPC call, 1..1000 (default: min(1000, total))
+ *
+ * Refactor:
+ *  - Fetch ALL transactions first (batched), THEN parse.
  */
 
 import clipboardy from "clipboardy";
@@ -23,7 +26,7 @@ import { inferUserWallet } from "../src/core/inferUserWallet.js";
 
 import { ReportService } from "../src/services/ReportService.js";
 
-
+import { BinanceKlinesService } from "../src/services/BinanceKlinesService.js";
 
 // ---------- Simple flag parser ----------
 type CliFlags = {
@@ -38,7 +41,6 @@ type CliFlags = {
   help?: boolean;
   report?: boolean | string;  // true or path
   out?: string;               // alias for the path
-
 };
 
 function parseArgs(argv: string[]): { flags: CliFlags; positionals: string[] } {
@@ -80,7 +82,6 @@ function parseArgs(argv: string[]): { flags: CliFlags; positionals: string[] } {
   return { flags, positionals };
 }
 
-
 function printHelp(): void {
   console.log(`
 Usage:
@@ -101,13 +102,12 @@ Options:
       --until        Return signatures until this one (inclusive)
   -c, --commitment   processed | confirmed | finalized (default: client setting)
   -h, --help         Show help
-  --report [file]  Generate an HTML report (optional output path)
-  --out <file>     Explicit output path for the report (overrides --report file)
+  --report [file]    Generate an HTML report (optional output path)
+  --out <file>       Explicit output path for the report (overrides --report file)
 `);
 }
 
 const debug = true;
-
 
 async function main() {
   const RPC_ENDPOINT = process.env.RPC_ENDPOINT!;
@@ -134,11 +134,10 @@ async function main() {
     maxRetries: 3,
     retryBackoffMs: 300,
     defaultCommitment: "confirmed",
-    log: (...args: any[]) => console.log(...args)
+    log: (...args: any[]) => console.log(...args),
   });
   const metaSvc = new MetaplexMetadataService(rpc);
 
-  
   // Address mode with pagination
   if (!sigs && flags.address) {
     // Backward-compat: if --limit provided without --total, treat it as total
@@ -171,51 +170,95 @@ async function main() {
 
   if (debug) console.log(`🔎 Processing ${sigs.length} transaction(s) from RPC: ${RPC_ENDPOINT}`);
 
-  const allActions: any[] = [];
+  /** -----------------------------
+   * 1) FETCH ALL TX FIRST (batched)
+   * ------------------------------*/
+  const fetched: Array<{ sig: string; tx: any | null }> = [];
+  const CHUNK = 50;
 
-  // Batch TX fetch in chunks of 100
-  for (let i = 0; i < sigs.length; i += 50) {
-    const chunk = sigs.slice(i, i + 50);
+  for (let i = 0; i < sigs.length; i += CHUNK) {
+    const chunk = sigs.slice(i, i + CHUNK);
     const txs = await rpc.getTransactionsParsedBatch(chunk, 0);
 
-    for (let j = 0; j < txs.length; j++) {
-      const tx = txs[j];
-    //  clipboardy.writeSync(JSON.stringify(tx, null, 2));
+    for (let j = 0; j < chunk.length; j++) {
+      fetched.push({ sig: chunk[j], tx: txs[j] ?? null });
+    }
+  }
 
-      const sig = chunk[j];
+  /** -----------------------------
+   * EXTRA: Compute first/last blockTime
+   * ------------------------------*/
+  const validBlockTimes = fetched
+    .map(f => f.tx?.blockTime)
+    .filter((t): t is number => typeof t === "number" && t > 0);
 
-      if (tx.meta.err) {
-        if (debug) console.warn(`⚠️ Transaction failed: ${sig}`);
-        continue;
-      }
+    let candles: any[] = [];
+    if (validBlockTimes.length > 0) {
+      const minBlockTime = Math.min(...validBlockTimes);
+      const maxBlockTime = Math.max(...validBlockTimes);
 
-      if (!tx) {
-        if (debug) console.warn(`⚠️ Transaction not found: ${sig}`);
-        continue;
-      }
+      const startTimeMs = Math.floor(minBlockTime / 60) * 60 * 1000; // arrondi début minute
+      const endTimeMs = (Math.floor(maxBlockTime / 60) + 1) * 60 * 1000; // arrondi fin minute + 1m
 
-      try {
-        const userWallet = inferUserWallet(tx);
-        if (debug) console.log("👤 Inferred wallet:", userWallet);
+  
+      // --- Fetch SOL prices 1m from Binance ---
+      const svc = new BinanceKlinesService({ market: "spot" });
+      candles = await svc.fetchKlinesRange({
+        symbol: "SOLUSDT",
+        interval: "1m",
+        startTimeMs: startTimeMs,
+        endTimeMs: endTimeMs,
+      });
+  
+      if (debug) console.log(`📈 Binance returned ${candles.length} candles (1m).`);
+      if (debug) console.log("First candle:", candles[0]);
+      if (debug) console.log("Last candle:", candles[candles.length - 1]);
 
-        const legs = transactionToSwapLegs_SOLBridge(tx, userWallet, {
-          windowTotalFromOut: 500,
-          requireAuthorityUserForOut: true,
-          debug,
-        });
-        if (debug) console.log(`🔗 TX ${sig}: ${legs.length} legs`);
+    }
 
-        const actions = legsToTradeActions(legs, {
-          txHash: sig,
-          wallet: userWallet,
-          blockTime: tx.blockTime,
-        });
-        if (debug) console.log(`📊 TX ${sig}: ${actions.length} actions`);
 
-        allActions.push(...actions);
-      } catch (err) {
-        console.error(`❌ Error parsing TX ${sig}:`, err);
-      }
+  /** -----------------------------
+   * 2) PARSE AFTER FETCH IS DONE
+   * ------------------------------*/
+  const allActions: any[] = [];
+
+
+
+  for (const { sig, tx } of fetched) {
+   clipboardy.writeSync(JSON.stringify(tx, null, 2));
+
+    if (!tx) {
+      if (debug) console.warn(`⚠️ Transaction not found: ${sig}`);
+      continue;
+    }
+
+    if (tx.meta?.err) {
+      if (debug) console.warn(`⚠️ Transaction failed: ${sig}`);
+      continue;
+    }
+
+    try {
+      const userWallet = inferUserWallet(tx);
+      if (debug) console.log("👤 Inferred wallet:", userWallet);
+
+      const legs = transactionToSwapLegs_SOLBridge(tx, userWallet, {
+        windowTotalFromOut: 500,
+        requireAuthorityUserForOut: true,
+        debug,
+      });
+      if (debug) console.log(`🔗 TX ${sig}: ${legs.length} legs`);
+
+      const actions = legsToTradeActions(legs, {
+        txHash: sig,
+        wallet: userWallet,
+        blockTime: tx.blockTime,
+        candles: candles
+      });
+      if (debug) console.log(`📊 TX ${sig}: ${actions.length} actions`);
+
+      allActions.push(...actions);
+    } catch (err) {
+      console.error(`❌ Error parsing TX ${sig}:`, err);
     }
   }
 
@@ -230,32 +273,45 @@ async function main() {
   if (debug) {
     console.log("\n🧬 Actions + metadata:");
     console.log(JSON.stringify(enriched, null, 2));
-
     console.log("Total RPC requests:", rpc.getRequestsCount());
-
-
+    console.log(`Total trades: ${enriched.length}`);
+    console.log(`Total transactions: ${fetched.length}`);
   }
 
+  
+  if (validBlockTimes.length > 0) {
+    const minBlockTime = Math.min(...validBlockTimes);
+    const maxBlockTime = Math.max(...validBlockTimes);
+
+    if (debug) console.log(`\n⏱️ First blockTime:  ${minBlockTime} (${new Date(minBlockTime * 1000).toISOString()})`);
+    if (debug) console.log(`⏱️ Last blockTime:   ${maxBlockTime} (${new Date(maxBlockTime * 1000).toISOString()})`);
+  } else {
+    if (debug) console.warn("⚠️ No valid blockTime found in fetched transactions.");
+  }
+
+
+
   // ----- REPORT (HTML) -----
-const wantReport = !!flags.report;
-if (wantReport) {
-  const outFile =
-    (typeof flags.report === "string" ? flags.report : undefined) ||
-    flags.out ||
-    "solana-trades-report.html";
+  const wantReport = !!flags.report;
+  if (wantReport) {
+    const outFile =
+      (typeof flags.report === "string" ? flags.report : undefined) ||
+      flags.out ||
+      "solana-trades-report.html";
 
-  const report = new ReportService();
-  await report.writeHtml(
-    // Cast minimal si tes actions ont déjà ces champs
-    enriched as any,
-    { outFile, title: "Solana Trades Report" }
-  );
+    const report = new ReportService();
+    await report.writeHtml(
+      enriched as any,
+      { outFile, title: "Solana Trades Report" }
+    );
 
-  console.log(`📄 Report written to: ${outFile}`);
-}
+    console.log(`📄 Report written to: ${outFile}`);
+  }
 
- /*  try {
-   clipboardy.writeSync(JSON.stringify(enriched, null, 2));
+
+  /* Optional clipboard copy
+  try {
+    clipboardy.writeSync(JSON.stringify(enriched, null, 2));
     if (debug) console.log("📋 Results copied to clipboard.");
   } catch {
     if (debug) console.log("⚠️ Could not copy results to clipboard.");

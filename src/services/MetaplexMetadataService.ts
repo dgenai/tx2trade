@@ -2,7 +2,7 @@ import { PublicKey } from "@solana/web3.js";
 import { SolanaRpcClient } from "./SolanaRpcClient.js";
 import { decodeMetaplexMetadataBase64 } from "../utils/borsh.js";
 import { TokenMeta, TradeAction } from "../types.js";
-import { METAPLEX_PROGRAM_ID, NATIVE_SOL } from "../constants.js";
+import { METAPLEX_PROGRAM_ID, WSOL_MINT } from "../constants.js";
 
 /**
  * Derive the PDA (Program Derived Address) of a Metaplex metadata account for a given mint.
@@ -40,8 +40,8 @@ export class MetaplexMetadataService {
     for (const a of actions) {
       const s = a.sold?.address;
       const b = a.bought?.address;
-      if (s && s !== NATIVE_SOL) set.add(s);
-      if (b && b !== NATIVE_SOL) set.add(b);
+      if (s && s !== WSOL_MINT) set.add(s);
+      if (b && b !== WSOL_MINT) set.add(b);
     }
     return [...set];
   }
@@ -55,7 +55,7 @@ export class MetaplexMetadataService {
   async fetchTokenMetadataMapFromActions(
     actions: TradeAction[]
   ): Promise<Record<string, TokenMeta>> {
-    const mints = this.getUniqueMints(actions).filter((m) => m !== NATIVE_SOL);
+    const mints = this.getUniqueMints(actions).filter((m) => m !== WSOL_MINT);
     if (mints.length === 0) return {};
 
     // Derive PDAs for metadata accounts
@@ -112,7 +112,7 @@ export class MetaplexMetadataService {
       // Enrich sold token
       if (out.sold?.address) {
         const mint = out.sold.address;
-        if (mint === NATIVE_SOL) {
+        if (mint === WSOL_MINT) {
           out.sold.symbol ??= "SOL";
           out.sold.name ??= "Solana";
         } else if (metaMap[mint]) {
@@ -126,7 +126,7 @@ export class MetaplexMetadataService {
       // Enrich bought token
       if (out.bought?.address) {
         const mint = out.bought.address;
-        if (mint === NATIVE_SOL) {
+        if (mint === WSOL_MINT) {
           out.bought.symbol ??= "SOL";
           out.bought.name ??= "Solana";
         } else if (metaMap[mint]) {

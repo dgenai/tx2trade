@@ -1,26 +1,33 @@
 // src/services/ReportService.ts
 import { writeFile, mkdir } from "fs/promises";
 import { dirname } from "path";
+import { TradeAction } from "../types.js";
 
 export type EnrichedAction = {
   txHash: string;
   wallet: string;
-  blockTime?: number | null;
-  type: string;                // BUY | SELL | SWAP | ...
-  amount?: number;             // primary token amount (kept for compatibility)
-  amountUsd?: number;          // optional
+  blockTime?: number | null; // epoch seconds
+  type: string;              // "BUY" | "SELL"
+  amount?: number;
   tokenSymbol?: string;
   tokenMint?: string;
   tokenName?: string;
 
-  // in/out (use these to fill the table)
+  // SOLD
   soldSymbol?: string;
+  soldName?: string;
   soldAmount?: number;
   soldMint?: string;
+  soldUsdPrice?: number;
+  soldUsdAmount?: number;
 
+  // BOUGHT
   boughtSymbol?: string;
+  boughtName?: string;
   boughtAmount?: number;
   boughtMint?: string;
+  boughtUsdPrice?: number;
+  boughtUsdAmount?: number;
 };
 
 export type ReportOptions = {
@@ -28,119 +35,58 @@ export type ReportOptions = {
   title?: string;
 };
 
-type AnyRec = Record<string, any>;
-
-/** Safe getter over nested paths like "a.b.c" */
-function pick<T = any>(obj: AnyRec, ...paths: string[]): T | undefined {
-  for (const p of paths) {
-    const parts = p.split(".");
-    let cur: any = obj;
-    let ok = true;
-    for (const k of parts) {
-      if (cur && k in cur) cur = cur[k];
-      else { ok = false; break; }
-    }
-    if (ok && cur !== undefined && cur !== null) return cur as T;
-  }
-  return undefined;
-}
-
-/** Normalize an action from several possible shapes (including your custom schema) */
-function normalizeAction(input: AnyRec): EnrichedAction {
-  // ---- User schema (what you send) ----
-  if ("transactionHash" in input || "walletAddress" in input) {
-    const txHash = String(input.transactionHash ?? "");
-    const wallet = String(input.walletAddress ?? "");
-    const blockTime =
-      input.transactionDate ? Math.floor(new Date(input.transactionDate).getTime() / 1000) : null;
-
-    const type = String(input.transactionType ?? "").toUpperCase();
-
-    const sold = input.sold ?? {};
-    const bought = input.bought ?? {};
-
-    // Also keep “primary” for compatibility (not used in the table)
-    const primary =
-      type === "BUY" ? bought :
-      type === "SELL" ? sold   :
-      (bought?.symbol || bought?.name || bought?.address) ? bought : sold;
-
-    const amount = typeof primary?.amount === "number" ? primary.amount : undefined;
-    const tokenSymbol = primary?.symbol ?? undefined;
-    const tokenName   = primary?.name   ?? undefined;
-    const tokenMint   = primary?.address ?? undefined;
-
-    return {
-      txHash,
-      wallet,
-      blockTime,
-      type,
-      amount,
-      tokenSymbol,
-      tokenName,
-      tokenMint,
-      // in/out columns are populated from sold/bought:
-      soldSymbol: sold.symbol,
-      soldAmount: typeof sold.amount === "number" ? sold.amount : undefined,
-      soldMint: sold.address,
-      boughtSymbol: bought.symbol,
-      boughtAmount: typeof bought.amount === "number" ? bought.amount : undefined,
-      boughtMint: bought.address,
-    };
-  }
-
-  // ---- Generic fallbacks (other shapes) ----
+/** Convertit un TradeAction vers EnrichedAction, en normalisant les nombres. */
+function normalizeAction(input: TradeAction): EnrichedAction {
+  const txHash = String(input.transactionHash ?? "");
+  const wallet = String(input.walletAddress ?? "");
   const blockTime =
-    pick<number>(input, "blockTime", "tx.blockTime") ??
-    (pick<string>(input, "transactionDate") ? Math.floor(new Date(String(pick<string>(input, "transactionDate"))).getTime() / 1000) : null);
+    input.transactionDate instanceof Date
+      ? Math.floor(input.transactionDate.getTime() / 1000)
+      : input.transactionDate
+      ? Math.floor(new Date(input.transactionDate as any).getTime() / 1000)
+      : null;
 
-  const txHash =
-    pick<string>(input, "txHash", "signature", "sig", "tx.signature", "transaction.signatures.0", "transactionHash") ?? "";
+  const type = String(input.transactionType ?? "").toUpperCase();
 
-  const wallet =
-    pick<string>(input, "wallet", "owner", "userWallet", "authority", "walletAddress") ?? "";
+  const sold = input.sold ?? ({} as TradeAction["sold"]);
+  const bought = input.bought ?? ({} as TradeAction["bought"]);
 
-  const type =
-    (pick<string>(input, "type", "actionType", "kind", "side", "transactionType") ?? "").toUpperCase();
-
-  const amount =
-    pick<number>(input, "amount", "uiAmount", "amountIn", "amountOut") ??
-    (typeof pick<string>(input, "amountString") === "string"
-      ? Number(pick<string>(input, "amountString"))
-      : undefined);
-
-  const amountUsd =
-    pick<number>(input, "amountUsd", "usdValue", "usdAmount") ??
-    (typeof pick<string>(input, "amountUsdString") === "string"
-      ? Number(pick<string>(input, "amountUsdString"))
-      : undefined);
-
-  const tokenSymbol =
-    pick<string>(input, "tokenSymbol", "symbol", "token.symbol", "assetSymbol");
-
-  const tokenName =
-    pick<string>(input, "tokenName", "name", "token.name", "assetName");
-
-  const tokenMint =
-    pick<string>(input, "tokenMint", "mint", "token.mint", "assetMint");
+  const toNum = (v: unknown): number | undefined => {
+    if (typeof v === "number" && Number.isFinite(v)) return v;
+    if (typeof v === "string" && v.trim() !== "") {
+      const n = Number(v);
+      return Number.isFinite(n) ? n : undefined;
+    }
+    return undefined;
+  };
 
   return {
     txHash,
     wallet,
     blockTime,
     type,
-    amount,
-    amountUsd,
-    tokenSymbol,
-    tokenName,
-    tokenMint,
-    // sold/bought may be missing in fallbacks; columns will show "—"
-    soldSymbol: pick(input, "soldSymbol", "inSymbol"),
-    soldAmount: pick(input, "soldAmount", "amountIn"),
-    soldMint:   pick(input, "soldMint", "inMint"),
-    boughtSymbol: pick(input, "boughtSymbol", "outSymbol"),
-    boughtAmount: pick(input, "boughtAmount", "amountOut"),
-    boughtMint:   pick(input, "boughtMint", "outMint"),
+
+    // Champs "génériques" laissés vides (non présents dans TradeAction)
+    amount: undefined,
+    tokenSymbol: undefined,
+    tokenName: undefined,
+    tokenMint: undefined,
+
+    // SOLD
+    soldSymbol: sold.symbol,
+    soldName: sold.name,
+    soldAmount: toNum(sold.amount),
+    soldMint: sold.address,
+    soldUsdPrice: toNum(sold.unitPriceUsd),
+    soldUsdAmount: toNum(sold.amountUsd),
+
+    // BOUGHT
+    boughtSymbol: bought.symbol,
+    boughtName: bought.name,
+    boughtAmount: toNum(bought.amount),
+    boughtMint: bought.address,
+    boughtUsdPrice: toNum(bought.unitPriceUsd),
+    boughtUsdAmount: toNum(bought.amountUsd),
   };
 }
 
@@ -160,24 +106,30 @@ export class ReportService {
 
   private fmtAmt(n?: number): string {
     if (typeof n !== "number" || !Number.isFinite(n)) return "—";
-    // readable but precise: up to 6 decimals, trim trailing zeros
-    const s = n.toLocaleString(undefined, { maximumFractionDigits: 6 });
-    return s;
+    // lisible et précis : jusqu'à 6 décimales
+    return n.toLocaleString(undefined, { maximumFractionDigits: 6 });
   }
 
+  /** Affiche uniquement nom/symbole + bouton copier (copie le mint si dispo, sinon le symbole). */
   private tokenCell(symbol?: string, name?: string, mint?: string): string {
-    const main = symbol || name || (mint ? this.short(mint, 6, 6) : "—");
-    const mintShort = mint ? `<code class="mono muted">${this.esc(this.short(mint, 4, 4))}</code>` : "";
-    return `<span class="token">${this.esc(main)} ${mintShort}</span>`;
+    const label = symbol || name || "—";
+    const copyValue = mint || symbol || "";
+    const copyBtn =
+      copyValue
+        ? `<button class="copy token-copy" data-copy="${this.esc(copyValue)}" title="Copier" aria-label="Copier">
+             <svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M16 1H8a2 2 0 0 0-2 2v2h2V3h8v8h2V3a2 2 0 0 0-2-2zm-3 6H5a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2zm0 12H5V9h8v10z"/></svg>
+           </button>`
+        : "";
+    return `<span class="token"><span class="token-name">${this.esc(label)}</span>${copyBtn}</span>`;
   }
 
-  generateHtml(_actions: AnyRec[], opts?: ReportOptions): string {
+  generateHtml(_actions: TradeAction[], opts?: ReportOptions): string {
     const actions = _actions.map(normalizeAction);
     const title = opts?.title ?? "Solana Trades Report";
 
     // KPIs
     const totalActions = actions.length;
-    const totalTx = new Set(actions.map(a => a.txHash || "")).size;
+    const totalTx = new Set(actions.map((a) => a.txHash || "")).size;
     const typeCount = actions.reduce<Record<string, number>>((acc, a) => {
       const k = a.type || "(unknown)";
       acc[k] = (acc[k] ?? 0) + 1;
@@ -191,7 +143,7 @@ export class ReportService {
     const fmtDate = (unix?: number | null) =>
       unix ? new Date(unix * 1000).toLocaleString() : "—";
 
-    // Flatten: one row per action
+    // Tri desc par date
     const sorted = [...actions].sort((a, b) => {
       const ta = a.blockTime ?? 0;
       const tb = b.blockTime ?? 0;
@@ -199,22 +151,31 @@ export class ReportService {
       return (a.txHash || "").localeCompare(b.txHash || "");
     });
 
-    const rows = sorted.map((a) => {
-      const when = fmtDate(a.blockTime);
-      const solscanUrl = a.txHash ? `https://solscan.io/tx/${this.esc(a.txHash)}` : "#";
+    const rows = sorted
+      .map((a) => {
+        const when = fmtDate(a.blockTime);
+        const solscanUrl = a.txHash
+          ? `https://solscan.io/tx/${this.esc(a.txHash)}`
+          : "#";
 
-      // Map in/out from sold/bought
-      const inAmt = this.fmtAmt(a.soldAmount);
-      const inTok = this.tokenCell(a.soldSymbol, undefined, a.soldMint);
+        const isBuy = (a.type || "").toUpperCase() === "BUY";
 
-      const outAmt = this.fmtAmt(a.boughtAmount);
-      const outTok = this.tokenCell(a.boughtSymbol, undefined, a.boughtMint);
+        // Champs calculés selon BUY/SELL
+        const tokenHtml = isBuy
+          ? this.tokenCell(a.boughtSymbol, a.boughtName, a.boughtMint)
+          : this.tokenCell(a.soldSymbol, a.soldName, a.soldMint);
 
-      return `
+        const qty = isBuy ? a.boughtAmount : a.soldAmount;
+        const unitPrice = isBuy ? a.boughtUsdPrice : a.soldUsdPrice;
+        const totalUsd = isBuy ? a.soldUsdAmount : a.boughtUsdAmount;
+
+        return `
         <tr>
           <td class="when">${this.esc(when)}</td>
           <td class="center">
-            ${a.txHash ? `
+            ${
+              a.txHash
+                ? `
             <a href="${solscanUrl}" target="_blank" rel="noopener noreferrer" class="icon-link" title="Open in Solscan" aria-label="Open in Solscan">
               <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true">
                 <defs>
@@ -226,24 +187,35 @@ export class ReportService {
                 <path d="M12 2l7.8 4.5v10.9L12 22 4.2 17.4V6.5L12 2z" fill="url(#g)" opacity=".25"/>
                 <path d="M7 9h10a1 1 0 1 1 0 2H7a1 1 0 1 1 0-2zm0 4h10a1 1 0 1 1 0 2H7a1 1 0 1 1 0-2z" fill="url(#g)"/>
               </svg>
-            </a>` : "—"}
+            </a>`
+                : "—"
+            }
           </td>
           <td class="wallet">
             <span class="mono">${this.esc(this.short(a.wallet))}</span>
-            ${a.wallet ? `<button class="copy" data-copy="${this.esc(a.wallet)}" title="Copy address" aria-label="Copy address">
+            ${
+              a.wallet
+                ? `<button class="copy" data-copy="${this.esc(
+                    a.wallet
+                  )}" title="Copy address" aria-label="Copy address">
               <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M16 1H8a2 2 0 0 0-2 2v2h2V3h8v8h2V3a2 2 0 0 0-2-2zm-3 6H5a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2zm0 12H5V9h8v10z"/></svg>
-            </button>` : ""}
+            </button>`
+                : ""
+            }
           </td>
           <td class="types">
-            <span class="pill ${this.esc((a.type || 'other').toLowerCase())}">${this.esc(a.type || "—")}</span>
+            <span class="pill ${this.esc(
+              (a.type || "other").toLowerCase()
+            )}">${this.esc(a.type || "—")}</span>
           </td>
-          <td class="num">${this.esc(inAmt)}</td>
-          <td>${inTok}</td>
-          <td class="num">${this.esc(outAmt)}</td>
-          <td>${outTok}</td>
+          <td class="num">${this.esc(this.fmtAmt(qty))}</td>
+          <td>${tokenHtml}</td>
+          <td class="num">${this.esc(this.fmtAmt(unitPrice))}</td>
+          <td class="num">${this.esc(this.fmtAmt(totalUsd))}</td>
         </tr>
       `;
-    }).join("");
+      })
+      .join("");
 
     const html = `<!doctype html>
 <html lang="fr">
@@ -309,7 +281,19 @@ export class ReportService {
   .num { text-align:right; font-variant-numeric: tabular-nums; }
 
   .token { display:inline-flex; align-items:center; gap:8px; }
-  .token .mono { opacity: .8; }
+  .token .token-name { line-height: 1; }
+  .token .copy.token-copy {
+    background: transparent;
+    border: 1px solid rgba(255,255,255,0.12);
+    border-radius: 6px;
+    padding: 2px;
+    width: 22px;
+    height: 22px;
+    color: var(--muted);
+    cursor: pointer;
+    transition: all .2s ease;
+  }
+  .token .copy.token-copy:hover { color: var(--text); border-color: rgba(255,255,255,0.25); }
 
   footer { color: var(--muted); text-align:center; margin: 30px 0 10px; font-size: 12px; }
 
@@ -341,18 +325,18 @@ export class ReportService {
 
     <div class="table-wrap">
       <table>
-        <thead>
-          <tr>
-            <th>Date</th>
-            <th class="center">Tx</th>
-            <th>Wallet</th>
-            <th>Type</th>
-            <th class="num">Amount In</th>
-            <th>Token In</th>
-            <th class="num">Amount Out</th>
-            <th>Token Out</th>
-          </tr>
-        </thead>
+      <thead>
+      <tr>
+        <th>Date</th>
+        <th class="center">Tx</th>
+        <th>Wallet</th>
+        <th>Type</th>
+        <th class="num">Qty</th>
+        <th>Token</th>
+        <th class="num">Unit Price (USD)</th>
+        <th class="num">Total (USD)</th>
+      </tr>
+      </thead>
         <tbody>
           ${rows || `<tr><td colspan="8">No actions.</td></tr>`}
         </tbody>
@@ -363,19 +347,21 @@ export class ReportService {
   </div>
 
   <script>
-    // Copy to clipboard (event delegation)
+    // Copy to clipboard (event delegation) - JS pur
     document.addEventListener('click', function (e) {
-      const target = e.target as Element | null;
-      const btn = target && ('closest' in target) ? (target as HTMLElement).closest('button.copy') : null;
+      const target = e.target;
+      const btn = target && target.closest ? target.closest('button.copy') : null;
       if (!btn) return;
       const text = btn.getAttribute('data-copy');
       if (!text) return;
       navigator.clipboard?.writeText(text).then(() => {
         btn.classList.add('ok');
-        btn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M9 16.2 4.8 12l-1.4 1.4L9 19 21 7l-1.4-1.4z"/></svg>';
+        btn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M9 16.2 4.8 12l-1.4 1.4L9 19 21 7l-1.4-1.4z"/></svg>';
         setTimeout(() => {
           btn.classList.remove('ok');
-          btn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M16 1H8a2 2 0 0 0-2 2v2h2V3h8v8h2V3a2 2 0 0 0-2-2zm-3 6H5a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2zm0 12H5V9h8v10z"/></svg>';
+          btn.innerHTML = btn.classList.contains('token-copy')
+            ? '<svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M16 1H8a2 2 0 0 0-2 2v2h2V3h8v8h2V3a2 2 0 0 0-2-2zm-3 6H5a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2zm0 12H5V9h8v10z"/></svg>'
+            : '<svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M16 1H8a2 2 0 0 0-2 2v2h2V3h8v8h2V3a2 2 0 0 0-2-2zm-3 6H5a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2zm0 12H5V9h8v10z"/></svg>';
         }, 800);
       });
     }, { passive: true });
@@ -385,7 +371,7 @@ export class ReportService {
     return html;
   }
 
-  async writeHtml(actions: AnyRec[], opts?: ReportOptions): Promise<string> {
+  async writeHtml(actions: TradeAction[], opts?: ReportOptions): Promise<string> {
     const html = this.generateHtml(actions, opts);
     if (opts?.outFile) {
       await mkdir(dirname(opts.outFile), { recursive: true });

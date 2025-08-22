@@ -7,6 +7,10 @@ import { TokenToTokenStrategy } from "../strategies/TokenToTokenStrategy.js";
 import { WsolToTokenStrategy } from "../strategies/WsolToTokenStrategy.js";
 import { AuthorityOnlyStrategy } from "../strategies/AuthorityOnlyStrategy.js";
 import { TokenToWsolStrategy } from "../strategies/TokenToWsolStrategy.js";
+import { WSOL_DECIMALS, WSOL_MINT } from "../constants.js";
+
+import { pushUserSolDeltaEdge } from "../parsing/solDeltas.js";
+
 
 type Options = {
   // Tolerance windows used by strategies to reconcile flows and amounts.
@@ -29,14 +33,15 @@ type Options = {
   dustRelPct?: number;
   // Safety cap to stop iterating passes.
   maxPasses?: number;
+
+  windowAroundIn?: number; 
 };
 
 // Simple tag for fees/dust filtering
 type EdgeTag = "fee" | "dust" | "normal";
 
 // Local fallback for WSOL mint (import from your types if available)
-const WSOL_MINT = "So11111111111111111111111111111111111111112";
-const WSOL_DECIMALS = 9;
+
 
 // Convert an edge amount to lamports (only meaningful for WSOL)
 function toLamports(e: TransferEdge): number {
@@ -91,6 +96,29 @@ function tagEdgesForFeesDust(
     }
   }
 
+    // 3) Heuristique: fee WSOL Jupiter = transfer "non-checked" autour d'un swap avec transferChecked
+
+  const wsolNonChecked = edges
+  .filter((e: any) => e.mint === WSOL_MINT && e.authority === userWallet && e.checked === false)
+  .sort((a, b) => a.seq - b.seq);
+
+// Repère s'il existe des outs WSOL checked significatifs dans une petite fenêtre
+const hasSignificantCheckedNearby = (baseSeq: number) => {
+  return edges.some((e: any) =>
+    e.mint === WSOL_MINT &&
+    e.authority === userWallet &&
+    e.checked === true &&
+    Math.abs(e.seq - baseSeq) <= 60 &&     // fenêtre serrée
+    toLamports(e) >= 300_000                // >= 0.0003 SOL ≈ “vrai flux de swap”
+  );
+};
+
+for (const e of wsolNonChecked) {
+  if (hasSignificantCheckedNearby(e.seq)) {
+    tags.set(e.seq, "fee");
+  }
+}
+
   return tags;
 }
 
@@ -114,6 +142,7 @@ export function transactionToSwapLegs_SOLBridge(
     minWsolLamports = 100_000,
     dustRelPct = 0.005,
     maxPasses = 6,
+    windowAroundIn = 200
   } = opts ?? {};
 
   const log = (...args: any[]) => {
@@ -123,6 +152,13 @@ export function transactionToSwapLegs_SOLBridge(
   // 1) Build edges from the transaction
   const { edges } = buildEdgesAndIndex(tx, { debug });
   log("Edges built:", { count: edges.length });
+
+  pushUserSolDeltaEdge(tx, edges, userWallet);
+
+  console.log("edges");
+  console.dir(edges, {depth:null}); 
+
+
   if (!edges.length) return [];
 
   // 2) Collect user token accounts from balances + authorities
@@ -130,6 +166,7 @@ export function transactionToSwapLegs_SOLBridge(
   for (const e of edges) {
     if (e.authority === userWallet) userTokenAccounts.add(e.source);
   }
+  userTokenAccounts.add(userWallet);
   log("User token accounts:", { count: userTokenAccounts.size });
 
   // 3) Tag fees/dust so they don’t pollute strategies
@@ -151,10 +188,12 @@ export function transactionToSwapLegs_SOLBridge(
     windowOutToSolIn,
     windowHubToUserIn,
     windowTotalFromOut,
+    windowAroundIn,
     requireAuthorityUserForOut,
     debug,
     log: (...a: any[]) => log(...a),
     tags,
+
   };
 
   const used = new Set<number>(); // consumed edge seqs
@@ -220,5 +259,6 @@ export function transactionToSwapLegs_SOLBridge(
   }
 
   log(`Done after ${pass} pass(es). Legs total: ${allLegs.length}`);
+
   return allLegs;
 }

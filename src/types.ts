@@ -6,8 +6,8 @@ export type TradeAction = {
     transactionType: "buy" | "sell";
     walletAddress: string;
     transactionDate:Date;
-    sold: { address?: string; amount?: number; symbol?: string; name?: string; uri?: string };
-    bought: { address?: string; amount?: number; symbol?: string; name?: string; uri?: string };
+    sold: { address?: string; amount?: number; symbol?: string; name?: string; uri?: string; unitPriceUsd:string, amountUsd:string  };
+    bought: { address?: string; amount?: number; symbol?: string; name?: string; uri?: string; unitPriceUsd:string, amountUsd:string  };
     };
     
     

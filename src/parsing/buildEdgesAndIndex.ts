@@ -1,9 +1,11 @@
-import { TransferEdge, TokAccInfo } from "../types.js";
+import { TransferEdge, TokAccInfo, WSOL_MINT } from "../types.js";
 import { buildAccountIndexSkeleton } from "./accountIndex.js";
 import { applyVisitors, VisitContext, InstructionVisitor } from "../visitor/InstructionVisitor.js";
 import { TokenVisitor } from "../visitor/TokenVisitor.js";
 import { AssociatedTokenVisitor } from "../visitor/AssociatedTokenVisitor.js";
 import { NoopVisitor } from "../visitor/NoopVisitor.js";
+import { SystemVisitor } from "../visitor/SystemVisitor.js";
+
 
 /**
  * Build the transfer edges and account index from a parsed Solana transaction.
@@ -50,6 +52,7 @@ export function buildEdgesAndIndex(
   const visitors: InstructionVisitor[] = [
     new TokenVisitor(),
     new AssociatedTokenVisitor(),
+    new SystemVisitor(), 
     new NoopVisitor(),
   ];
   log("Applying visitors");
@@ -60,3 +63,5 @@ export function buildEdgesAndIndex(
   log("Completed", { edges: edges.length, accounts: accountIndex.size });
   return { edges, accountIndex };
 }
+
+
