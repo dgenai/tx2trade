@@ -95,7 +95,6 @@ export function legsToTradeActions(
   const actions: TradeAction[] = [];
   const txDate = blockTimeToDate(ctx.blockTime);
 
-  // Retrieve SOL/USD price at the transaction time
   const solPrice = getSolPriceAt(candles, ctx.blockTime);
 
   for (const leg of legs) {
@@ -104,12 +103,19 @@ export function legsToTradeActions(
     const soldAmt = Number(leg.soldAmount ?? 0);
     const boughtAmt = Number(leg.boughtAmount ?? 0);
 
-    if (leg.soldMint === WSOL_MINT) {
-      // Case: user spent SOL to acquire another token (BUY)
-      const soldSolUnit = solPrice;
-      const soldSolUsd = soldSolUnit ? soldAmt * soldSolUnit : null;
+    // Fees (robust fallbacks if not present on the leg)
+    const router = Number(leg.routerFees ?? 0);
+    const tip = Number(leg.tip ?? 0);
+    const network = Number(leg.networkFee ?? 0);
+    const rent = Number(leg.rent ?? 0);
 
-      // Derive token USD unit price from SOL spent / token amount
+    if (leg.soldMint === WSOL_MINT) {
+      // BUY: user spent SOL for a token
+      // Use ONLY the swap core SOL to price the token (exclude router/tip/network)
+      const coreSol = Number(leg.soldCore ?? soldAmt);          // fallback to soldAmt if missing
+      const soldSolUnit = solPrice;
+      const soldSolUsd = soldSolUnit ? coreSol * soldSolUnit : null;
+
       const boughtTokenUnit = boughtAmt > 0 && soldSolUsd != null ? (soldSolUsd / boughtAmt) : null;
       const boughtTokenUsd = boughtTokenUnit != null ? boughtAmt * boughtTokenUnit : null;
 
@@ -118,13 +124,15 @@ export function legsToTradeActions(
         transactionHash: ctx.txHash,
         transactionType: "buy",
         walletAddress: ctx.wallet,
+        // Sold = SOL core outflow valued (fees excluded for pricing)
         sold: {
           address: WSOL_MINT,
           symbol: "SOL",
-          amount: soldAmt,
+          amount: coreSol, // show the core that actually priced the trade
           unitPriceUsd: safeUsd(soldSolUnit),
           amountUsd: safeUsd(soldSolUsd),
         },
+        // Bought = token, valued from core SOL cost
         bought: {
           address: leg.boughtMint,
           amount: boughtAmt,
@@ -133,36 +141,42 @@ export function legsToTradeActions(
         },
       });
     } else if (leg.boughtMint === WSOL_MINT) {
-      // Case: user sold a token to receive SOL (SELL)
-      const boughtSolUnit = solPrice;
-      const boughtSolUsd = boughtSolUnit ? boughtAmt * boughtSolUnit : null;
+      // SELL: user sold a token and received SOL
+      // Value SOLD side using GROSS SOL (matches explorers)
+      const netSol = boughtAmt; // what hit the wallet
+      const grossSol = netSol + router + tip + network + rent;
 
-      // Derive sold token USD unit price from SOL received / sold amount
-      const soldTokenUnit = soldAmt > 0 && boughtSolUsd != null ? (boughtSolUsd / soldAmt) : null;
-      const soldTokenUsd = soldTokenUnit != null ? soldAmt * soldTokenUnit : null;
+      const solUnit = solPrice;
+      const boughtSolUsdNet = solUnit ? netSol * solUnit : null;      // keep bought side as net
+      const soldTokenUsdGross = solUnit ? grossSol * solUnit : null;  // sold side uses gross
+
+      const soldTokenUnit = soldAmt > 0 && soldTokenUsdGross != null
+        ? (soldTokenUsdGross / soldAmt)
+        : null;
 
       actions.push({
         transactionDate: txDate,
         transactionHash: ctx.txHash,
         transactionType: "sell",
         walletAddress: ctx.wallet,
+        // Sold = token, valued from GROSS SOL (so you get ~$200 instead of ~$193)
         sold: {
           address: leg.soldMint,
           amount: soldAmt,
           unitPriceUsd: safeUsd(soldTokenUnit),
-          amountUsd: safeUsd(soldTokenUsd),
+          amountUsd: safeUsd(soldTokenUsdGross),
         },
+        // Bought = SOL NET (what actually landed)
         bought: {
           address: WSOL_MINT,
           symbol: "SOL",
-          amount: boughtAmt,
-          unitPriceUsd: safeUsd(boughtSolUnit),
-          amountUsd: safeUsd(boughtSolUsd),
+          amount: netSol,
+          unitPriceUsd: safeUsd(solUnit),
+          amountUsd: safeUsd(boughtSolUsdNet),
         },
       });
     } else {
-      // Case: token-to-token swap (no direct SOL involvement)
-      // Without SOL as reference, cannot infer USD value reliably.
+      // Token ↔ Token (no SOL reference → leave USD at 0)
       actions.push({
         transactionDate: txDate,
         transactionHash: ctx.txHash,
@@ -187,3 +201,4 @@ export function legsToTradeActions(
   log(`Built ${actions.length} actions`, actions);
   return actions;
 }
+

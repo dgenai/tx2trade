@@ -1,16 +1,18 @@
 #!/usr/bin/env ts-node
 
 /**
- * CLI: parse Solana transactions into trade actions with enriched metadata.
+ * CLI Tool: Parse Solana transactions into structured trade actions,
+ * enriched with token metadata and market data.
  *
- * New (pagination):
- *  - --address mode supports fetching >1000 signatures via paginated calls.
- *  - Flags:
- *      --total <n>      Target total signatures to retrieve (default 3000)
- *      --pageSize <n>   Page size per RPC call, 1..1000 (default: min(1000, total))
+ * Features:
+ *  - Direct signature parsing (from arguments or --sigs).
+ *  - Address mode with pagination (>1000 signatures supported).
+ *  - Batch fetching of transactions, parsed after retrieval.
+ *  - Optional HTML report generation.
+ *  - Binance SOL/USDT 1m candles enrichment for blockTime ranges.
  *
- * Refactor:
- *  - Fetch ALL transactions first (batched), THEN parse.
+ * Example:
+ *   ts-node src/app/main.ts --address <PUBKEY> --total 3000 --pageSize 1000
  */
 
 import clipboardy from "clipboardy";
@@ -25,24 +27,27 @@ import { legsToTradeActions } from "../src/core/actions.js";
 import { inferUserWallet } from "../src/core/inferUserWallet.js";
 
 import { ReportService } from "../src/services/ReportService.js";
-
 import { BinanceKlinesService } from "../src/services/BinanceKlinesService.js";
 
-// ---------- Simple flag parser ----------
+// ---------- CLI Flags definition ----------
 type CliFlags = {
-  sigs?: string[];
-  address?: string;
-  limit?: number;         // kept for backward compat (single page); prefer --total now
-  total?: number;         // total signatures to fetch across pages
-  pageSize?: number;      // per-page RPC size (max 1000)
-  before?: string;
-  until?: string;
-  commitment?: Commitment;
-  help?: boolean;
-  report?: boolean | string;  // true or path
-  out?: string;               // alias for the path
+  sigs?: string[];              // Transaction signatures
+  address?: string;             // Address to fetch signatures from
+  limit?: number;               // Legacy single-page limit (prefer --total)
+  total?: number;               // Total number of signatures to fetch
+  pageSize?: number;            // RPC page size (max 1000)
+  before?: string;              // Fetch signatures before this one
+  until?: string;               // Fetch signatures until this one
+  commitment?: Commitment;      // Solana commitment level
+  help?: boolean;               // Show help
+  report?: boolean | string;    // Generate HTML report (true or output path)
+  out?: string;                 // Explicit output path (overrides report)
 };
 
+/**
+ * Minimal flag parser.
+ * Supports both long/short aliases and positional args.
+ */
 function parseArgs(argv: string[]): { flags: CliFlags; positionals: string[] } {
   const flags: CliFlags = {};
   const positionals: string[] = [];
@@ -63,7 +68,7 @@ function parseArgs(argv: string[]): { flags: CliFlags; positionals: string[] } {
       if (v === "processed" || v === "confirmed" || v === "finalized") flags.commitment = v;
       else console.warn(`⚠️ Unknown commitment "${v}", ignoring.`);
     } else if (a === "--report") {
-      // --report (bool) OU --report <chemin>
+      // Support both `--report` (bool) and `--report <file>`
       const peek = argv[i + 1];
       if (peek && !peek.startsWith("-")) {
         flags.report = peek;
@@ -82,10 +87,13 @@ function parseArgs(argv: string[]): { flags: CliFlags; positionals: string[] } {
   return { flags, positionals };
 }
 
+/**
+ * Print CLI usage help.
+ */
 function printHelp(): void {
   console.log(`
 Usage:
-  # Direct signatures (positional or --sigs)
+  # Direct signatures
   ts-node src/app/main.ts <sig1> [sig2 ...]
   ts-node src/app/main.ts --sigs sig1,sig2,sig3
 
@@ -95,20 +103,28 @@ Usage:
 Options:
   -s, --sigs         Comma-separated list of signatures
   -a, --address      Address to fetch signatures from
-  -l, --limit        Single-page cap (max 1000). Prefer --total for pagination.
-      --total        Total signatures to collect across pages (default: 3000)
-      --pageSize     Page size per RPC call (1..1000). Default: min(1000, total)
-      --before       Return signatures before this one (exclusive)
-      --until        Return signatures until this one (inclusive)
-  -c, --commitment   processed | confirmed | finalized (default: client setting)
+  -l, --limit        Single-page cap (legacy, max 1000). Prefer --total.
+      --total        Total signatures across pages (default: 3000)
+      --pageSize     RPC page size (1..1000). Default: min(1000, total)
+      --before       Return signatures before this one
+      --until        Return signatures until this one
+  -c, --commitment   processed | confirmed | finalized
   -h, --help         Show help
-  --report [file]    Generate an HTML report (optional output path)
-  --out <file>       Explicit output path for the report (overrides --report file)
+  --report [file]    Generate an HTML report (optional path)
+  --out <file>       Output path for report (overrides --report)
 `);
 }
 
 const debug = true;
 
+/**
+ * Main execution flow.
+ * - Parse CLI arguments
+ * - Fetch signatures (direct or address mode with pagination)
+ * - Batch-fetch transactions
+ * - Parse into trade actions with candles + metadata
+ * - Optionally output HTML report
+ */
 async function main() {
   const RPC_ENDPOINT = process.env.RPC_ENDPOINT!;
   if (!RPC_ENDPOINT) throw new Error("RPC_ENDPOINT is missing");
@@ -119,14 +135,10 @@ async function main() {
     process.exit(0);
   }
 
-  // Decide input mode
+  // ---- Determine input signatures ----
   let sigs: string[] | undefined;
-
-  if (flags.sigs?.length) {
-    sigs = flags.sigs;
-  } else if (positionals.length) {
-    sigs = positionals;
-  }
+  if (flags.sigs?.length) sigs = flags.sigs;
+  else if (positionals.length) sigs = positionals;
 
   const rpc = new SolanaRpcClient({
     endpoint: RPC_ENDPOINT,
@@ -138,9 +150,8 @@ async function main() {
   });
   const metaSvc = new MetaplexMetadataService(rpc);
 
-  // Address mode with pagination
+  // ---- Address mode with pagination ----
   if (!sigs && flags.address) {
-    // Backward-compat: if --limit provided without --total, treat it as total
     const total = Math.max(1, flags.total ?? flags.limit ?? 3000);
     const pageSize = flags.pageSize;
 
@@ -159,79 +170,70 @@ async function main() {
       commitment: flags.commitment,
     });
 
-    if (debug) console.log(`📥 Retrieved ${sigs.length} signature(s) from address with pagination.`);
+    if (debug) console.log(`📥 Retrieved ${sigs.length} signature(s).`);
   }
 
   if (!sigs || sigs.length === 0) {
     printHelp();
-    console.error("❌ No signatures provided and no address-based results. Nothing to do.");
+    console.error("❌ No signatures provided and no address-based results.");
     process.exit(1);
   }
 
   if (debug) console.log(`🔎 Processing ${sigs.length} transaction(s) from RPC: ${RPC_ENDPOINT}`);
 
-  /** -----------------------------
-   * 1) FETCH ALL TX FIRST (batched)
-   * ------------------------------*/
+  // -------------------------------
+  // 1) Fetch transactions in batch
+  // -------------------------------
   const fetched: Array<{ sig: string; tx: any | null }> = [];
-  const CHUNK = 50;
+  const CHUNK = 50; // limit per batch to avoid RPC overload
 
   for (let i = 0; i < sigs.length; i += CHUNK) {
     const chunk = sigs.slice(i, i + CHUNK);
     const txs = await rpc.getTransactionsParsedBatch(chunk, 0);
-
     for (let j = 0; j < chunk.length; j++) {
       fetched.push({ sig: chunk[j], tx: txs[j] ?? null });
     }
   }
 
-  /** -----------------------------
-   * EXTRA: Compute first/last blockTime
-   * ------------------------------*/
+  // -------------------------------
+  // 2) Retrieve SOL/USDT candles
+  // -------------------------------
   const validBlockTimes = fetched
     .map(f => f.tx?.blockTime)
     .filter((t): t is number => typeof t === "number" && t > 0);
 
-    let candles: any[] = [];
-    if (validBlockTimes.length > 0) {
-      const minBlockTime = Math.min(...validBlockTimes);
-      const maxBlockTime = Math.max(...validBlockTimes);
+  let candles: any[] = [];
+  if (validBlockTimes.length > 0) {
+    const minBlockTime = Math.min(...validBlockTimes);
+    const maxBlockTime = Math.max(...validBlockTimes);
 
-      const startTimeMs = Math.floor(minBlockTime / 60) * 60 * 1000; // arrondi début minute
-      const endTimeMs = (Math.floor(maxBlockTime / 60) + 1) * 60 * 1000; // arrondi fin minute + 1m
+    // Round to minute boundaries
+    const startTimeMs = Math.floor(minBlockTime / 60) * 60 * 1000;
+    const endTimeMs = (Math.floor(maxBlockTime / 60) + 1) * 60 * 1000;
 
-  
-      // --- Fetch SOL prices 1m from Binance ---
-      const svc = new BinanceKlinesService({ market: "spot" });
-      candles = await svc.fetchKlinesRange({
-        symbol: "SOLUSDT",
-        interval: "1m",
-        startTimeMs: startTimeMs,
-        endTimeMs: endTimeMs,
-      });
-  
-      if (debug) console.log(`📈 Binance returned ${candles.length} candles (1m).`);
-      if (debug) console.log("First candle:", candles[0]);
-      if (debug) console.log("Last candle:", candles[candles.length - 1]);
+    const svc = new BinanceKlinesService({ market: "spot" });
+    candles = await svc.fetchKlinesRange({
+      symbol: "SOLUSDT",
+      interval: "1m",
+      startTimeMs,
+      endTimeMs,
+    });
 
-    }
+    if (debug) console.log(`📈 Binance returned ${candles.length} candles (1m).`);
+  }
 
-
-  /** -----------------------------
-   * 2) PARSE AFTER FETCH IS DONE
-   * ------------------------------*/
+  // -------------------------------
+  // 3) Parse into trade actions
+  // -------------------------------
   const allActions: any[] = [];
 
-
-
   for (const { sig, tx } of fetched) {
-   clipboardy.writeSync(JSON.stringify(tx, null, 2));
+    clipboardy.writeSync(JSON.stringify(tx, null, 2)); // Debug: copy raw tx to clipboard
 
     if (!tx) {
       if (debug) console.warn(`⚠️ Transaction not found: ${sig}`);
       continue;
     }
-
     if (tx.meta?.err) {
       if (debug) console.warn(`⚠️ Transaction failed: ${sig}`);
       continue;
@@ -252,7 +254,7 @@ async function main() {
         txHash: sig,
         wallet: userWallet,
         blockTime: tx.blockTime,
-        candles: candles
+        candles,
       });
       if (debug) console.log(`📊 TX ${sig}: ${actions.length} actions`);
 
@@ -262,11 +264,9 @@ async function main() {
     }
   }
 
-  if (debug) {
-    console.log("\n📊 Aggregated trade actions across all transactions:");
-    console.log(JSON.stringify(allActions, null, 2));
-  }
-
+  // -------------------------------
+  // 4) Enrich with metadata
+  // -------------------------------
   const metaMap = await metaSvc.fetchTokenMetadataMapFromActions(allActions);
   const enriched = metaSvc.enrichActionsWithMetadata(allActions, metaMap);
 
@@ -278,46 +278,26 @@ async function main() {
     console.log(`Total transactions: ${fetched.length}`);
   }
 
-  
-  if (validBlockTimes.length > 0) {
-    const minBlockTime = Math.min(...validBlockTimes);
-    const maxBlockTime = Math.max(...validBlockTimes);
-
-    if (debug) console.log(`\n⏱️ First blockTime:  ${minBlockTime} (${new Date(minBlockTime * 1000).toISOString()})`);
-    if (debug) console.log(`⏱️ Last blockTime:   ${maxBlockTime} (${new Date(maxBlockTime * 1000).toISOString()})`);
-  } else {
-    if (debug) console.warn("⚠️ No valid blockTime found in fetched transactions.");
-  }
-
-
-
-  // ----- REPORT (HTML) -----
-  const wantReport = !!flags.report;
-  if (wantReport) {
+  // -------------------------------
+  // 5) Generate report (optional)
+  // -------------------------------
+  if (flags.report) {
     const outFile =
       (typeof flags.report === "string" ? flags.report : undefined) ||
       flags.out ||
       "solana-trades-report.html";
 
     const report = new ReportService();
-    await report.writeHtml(
-      enriched as any,
-      { outFile, title: "Solana Trades Report" }
-    );
+    await report.writeHtml(enriched as any, {
+      outFile,
+      title: "Solana Trades Report",
+    });
 
     console.log(`📄 Report written to: ${outFile}`);
   }
-
-
-  /* Optional clipboard copy
-  try {
-    clipboardy.writeSync(JSON.stringify(enriched, null, 2));
-    if (debug) console.log("📋 Results copied to clipboard.");
-  } catch {
-    if (debug) console.log("⚠️ Could not copy results to clipboard.");
-  } */
 }
 
+// Entrypoint
 main().catch((err) => {
   console.error("❌ Unhandled error in main():", err);
 });

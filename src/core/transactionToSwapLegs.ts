@@ -38,7 +38,7 @@ type Options = {
 };
 
 // Simple tag for fees/dust filtering
-type EdgeTag = "fee" | "dust" | "normal";
+type EdgeTag = "fee" | "dust" | "normal" | "tip";
 
 // Local fallback for WSOL mint (import from your types if available)
 
@@ -48,37 +48,43 @@ function toLamports(e: TransferEdge): number {
   return e.mint === WSOL_MINT ? Math.round(e.amount * 10 ** WSOL_DECIMALS) : 0;
 }
 
-// Minimal, robust fee/dust tagging.
-// - Absolute WSOL dust threshold
-// - Relative dust per mint based on the largest transfer for that mint
-// - Small pattern for repeated WSOL user fees (same amounts in a tight window)
+function sumSol(edges: TransferEdge[]) {
+  return edges.reduce((acc, e) => acc + e.amount, 0); // already in SOL units
+}
+
+
+
+// EdgeTag = "fee" | "dust" | "normal" | "tip"
+
 function tagEdgesForFeesDust(
   edges: TransferEdge[],
   userWallet: string,
   {
-    minWsolLamports = 100_000, // ~0.0001 SOL
-    dustRelPct = 0.005,        // 0.5% of the max flow per mint
-  }: { minWsolLamports?: number; dustRelPct?: number }
+    minWsolLamports = 100_000, // 0.0001 SOL
+    dustRelPct = 0.005,        // 0.5% of max flow per mint
+    clusterWindowSeq = 120,    // +- window to cluster WSOL outs around a token IN
+  }: { minWsolLamports?: number; dustRelPct?: number; clusterWindowSeq?: number }
 ): Map<number, EdgeTag> {
   const tags = new Map<number, EdgeTag>();
   const maxByMint = new Map<string, number>();
 
+  const toLamports = (e: TransferEdge) =>
+    e.mint === WSOL_MINT ? Math.round(e.amount * 1e9) : 0;
+
+  // Base: dust vs normal (by mint)
   for (const e of edges) {
     maxByMint.set(e.mint, Math.max(maxByMint.get(e.mint) ?? 0, e.amount));
   }
-
-  // 1) absolute WSOL dust + relative dust per mint
   for (const e of edges) {
     const isDustAbsWsol = e.mint === WSOL_MINT && toLamports(e) < minWsolLamports;
     const maxMint = maxByMint.get(e.mint) ?? 0;
     const isDustRel = maxMint > 0 && e.amount < maxMint * dustRelPct;
-
     tags.set(e.seq, isDustAbsWsol || isDustRel ? "dust" : "normal");
   }
 
-  // 2) repeated WSOL user fees: several nearly-equal WSOL outs signed by the user in a short window
+  // Pattern: repeated equal WSOL outs => fee
   const wsolUser = edges
-    .filter((e) => e.mint === WSOL_MINT && e.authority === userWallet)
+    .filter(e => e.mint === WSOL_MINT && e.authority === userWallet)
     .sort((a, b) => a.seq - b.seq);
 
   for (let i = 0; i < wsolUser.length; i++) {
@@ -86,8 +92,8 @@ function tagEdgesForFeesDust(
     const group: TransferEdge[] = [];
     for (let j = i + 1; j < wsolUser.length; j++) {
       const b = wsolUser[j];
-      if (b.seq - a.seq > 30) break; // tight window
-      const almostEqual = Math.abs(toLamports(b) - toLamports(a)) <= 10; // ~few lamports
+      if (b.seq - a.seq > 30) break;
+      const almostEqual = Math.abs(toLamports(b) - toLamports(a)) <= 10;
       if (almostEqual) group.push(b);
     }
     if (group.length >= 2) {
@@ -96,31 +102,161 @@ function tagEdgesForFeesDust(
     }
   }
 
-    // 3) Heuristique: fee WSOL Jupiter = transfer "non-checked" autour d'un swap avec transferChecked
-
+  // Heuristic: non-checked small WSOL outs => tip/fee
   const wsolNonChecked = edges
-  .filter((e: any) => e.mint === WSOL_MINT && e.authority === userWallet && e.checked === false)
-  .sort((a, b) => a.seq - b.seq);
+    .filter((e: any) => e.mint === WSOL_MINT && e.authority === userWallet && e.checked === false)
+    .sort((a, b) => a.seq - b.seq);
 
-// Repère s'il existe des outs WSOL checked significatifs dans une petite fenêtre
-const hasSignificantCheckedNearby = (baseSeq: number) => {
-  return edges.some((e: any) =>
-    e.mint === WSOL_MINT &&
-    e.authority === userWallet &&
-    e.checked === true &&
-    Math.abs(e.seq - baseSeq) <= 60 &&     // fenêtre serrée
-    toLamports(e) >= 300_000                // >= 0.0003 SOL ≈ “vrai flux de swap”
-  );
-};
+  const hasSignificantCheckedNearby = (baseSeq: number) =>
+    edges.some((e: any) =>
+      e.mint === WSOL_MINT &&
+      e.authority === userWallet &&
+      e.checked === true &&
+      Math.abs(e.seq - baseSeq) <= 60 &&
+      toLamports(e) >= 300_000 // >= 0.0003 SOL
+    );
 
-for (const e of wsolNonChecked) {
-  if (hasSignificantCheckedNearby(e.seq)) {
-    tags.set(e.seq, "fee");
+  for (const e of wsolNonChecked) {
+    const lam = toLamports(e);
+    if (hasSignificantCheckedNearby(e.seq)) {
+      tags.set(e.seq, "fee");
+    } else if (lam > 0 && lam <= 2_000_000) {
+      tags.set(e.seq, "tip"); // <= 0.002 SOL
+    } else if (lam > 0 && lam <= 10_000_000) {
+      tags.set(e.seq, "fee"); // 0.002–0.01 SOL
+    }
   }
-}
+
+  // ⚡ NEW: cluster per token IN — keep single largest as core, reclass others as fee/tip
+  const tokenIns = edges
+    .filter(e => e.mint !== WSOL_MINT && e.authority !== userWallet) // token credited to user (authority ≠ user)
+    .sort((a, b) => a.seq - b.seq);
+
+  for (const inn of tokenIns) {
+    const outs = edges.filter(
+      e =>
+        e.mint === WSOL_MINT &&
+        e.authority === userWallet &&
+        Math.abs(e.seq - inn.seq) <= clusterWindowSeq
+    );
+    if (!outs.length) continue;
+
+    // Pick dominant (largest) as core
+    let core = outs[0];
+    for (const o of outs) {
+      if (toLamports(o) > toLamports(core)) core = o;
+    }
+    tags.set(core.seq, "normal"); // ensure core is normal
+
+    // Others => tip or fee
+    for (const o of outs) {
+      if (o.seq === core.seq) continue;
+      const cur = tags.get(o.seq);
+      if (cur === "fee" || cur === "tip") continue; // keep previous strong classification
+      const lam = toLamports(o);
+      if (lam <= 2_000_000) tags.set(o.seq, "tip");
+      else tags.set(o.seq, "fee");
+    }
+  }
 
   return tags;
 }
+
+
+function attachFeesAndNetsToLegs({
+  tx, legs, edges, tags, userWallet, windowSeq = 200,
+}: {
+  tx: any;
+  legs: SwapLeg[];
+  edges: TransferEdge[];
+  tags: Map<number, "fee" | "dust" | "normal" | "tip">;
+  userWallet: string;
+  windowSeq?: number;
+}): void {
+  const LAMPORTS_PER_SOL = 1e9;
+  const networkFee = Number(tx?.meta?.fee ?? 0) / LAMPORTS_PER_SOL;
+
+  const isSolDelta = (e: TransferEdge) => {
+    const s = String((e as any).source ?? "");
+    const d = String((e as any).destination ?? "");
+    return s.startsWith("sol:delta") || d.startsWith("sol:delta") || (e as any).synthetic === true;
+  };
+
+  const forceClass = (e: TransferEdge, t?: "fee"|"dust"|"normal"|"tip") => {
+    // Heuristique fiable: un transfert System top-level est un tip Jito/priority
+    const depth = (e as any).depth ?? 0;
+    if (depth === 0) return "tip";
+    return t ?? "normal";
+  };
+
+  for (const leg of legs) {
+    if (!leg.path?.length) continue;
+
+    const seqs = leg.path.map(p => p.seq);
+    const minSeq = Math.min(...seqs);
+    const maxSeq = Math.max(...seqs);
+
+    const isBuy  = leg.soldMint   === WSOL_MINT; // SOL -> token
+    const isSell = leg.boughtMint === WSOL_MINT; // token -> SOL
+
+    const wsolUserOuts = edges.filter((e: TransferEdge) =>
+      e.mint === WSOL_MINT &&
+      e.authority === userWallet &&        
+      !isSolDelta(e) &&                    
+      e.seq >= (minSeq - windowSeq) &&
+      e.seq <= (maxSeq + windowSeq)
+    );
+
+    let core = 0, router = 0, tip = 0;
+    const fb = {
+      core:   [] as {seq:number; amount:number}[],
+      router: [] as {seq:number; amount:number}[],
+      tip:    [] as {seq:number; amount:number}[],
+    };
+
+    if (isBuy) {
+      for (const e of wsolUserOuts) {
+        const t0 = tags.get(e.seq);
+        const t  = forceClass(e, t0);
+        if (t === "tip")        { tip    += e.amount; fb.tip.push({seq:e.seq, amount:e.amount}); }
+        else if (t === "fee")   { router += e.amount; fb.router.push({seq:e.seq, amount:e.amount}); }
+        else /* normal */       { core   += e.amount; fb.core.push({seq:e.seq, amount:e.amount}); }
+      }
+
+      const transfersOnly = core + router + tip;
+
+      leg.soldCore      = core || undefined;
+      leg.routerFees    = router || undefined;
+      leg.tip           = tip || undefined;
+      leg.networkFee    = networkFee || undefined;
+      leg.transfersOnly = transfersOnly || undefined;
+      leg.soldAllIn     = (transfersOnly + networkFee) || undefined;
+
+    } else if (isSell) {
+    
+      for (const e of wsolUserOuts) {
+        const t0 = tags.get(e.seq);
+        const t  = forceClass(e, t0);
+        if (t === "tip")      { tip    += e.amount; fb.tip.push({seq:e.seq, amount:e.amount}); }
+        else /* fee/normal */ { router += e.amount; fb.router.push({seq:e.seq, amount:e.amount}); }
+      }
+
+      leg.soldCore   = undefined;
+      leg.routerFees = router || undefined;
+      leg.tip        = tip || undefined;
+      leg.networkFee = networkFee || undefined;
+      // (optional) (leg as any).grossSol = Number(leg.boughtAmount ?? 0) + router + tip + networkFee;
+    }
+
+    if (fb.core.length || fb.router.length || fb.tip.length) {
+      leg.feeBreakdown = fb;
+    }
+  }
+}
+
+
+
+
 
 /**
  * New engine:
@@ -211,12 +347,13 @@ export function transactionToSwapLegs_SOLBridge(
     for (const strat of pipeline) {
       const name = strat.constructor?.name ?? "UnknownStrategy";
 
-       // Exclure 'fee' pour tout le monde
-  let cleanEdges: TransferEdge[] = edges.filter(
-    (e) => !used.has(e.seq) && tags.get(e.seq) !== "fee"
-  );
+      let cleanEdges: TransferEdge[] = edges.filter(
+        (e: TransferEdge) => !used.has(e.seq) && tags.get(e.seq) !== "fee" && tags.get(e.seq) !== "tip"
+      );
 
-  // Pour AuthorityOnly, exclure aussi la poussière
+  
+
+  // exclude dust for AuthorityOnly
   if (name === "AuthorityOnly") {
     cleanEdges = cleanEdges.filter((e) => tags.get(e.seq) !== "dust");
   }
@@ -260,5 +397,14 @@ export function transactionToSwapLegs_SOLBridge(
 
   log(`Done after ${pass} pass(es). Legs total: ${allLegs.length}`);
 
+  attachFeesAndNetsToLegs({
+    tx,
+    legs: allLegs,
+    edges,
+    tags,
+    userWallet,
+  });
+
+  console.dir(allLegs, {depth: null})
   return allLegs;
 }

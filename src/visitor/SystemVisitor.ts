@@ -1,20 +1,40 @@
 import { InstructionVisitor, VisitContext } from "./InstructionVisitor.js";
-import { WSOL_MINT, NSOL_MINT } from "../constants.js";
+import { WSOL_MINT } from "../constants.js";
 
-
+/**
+ * SystemVisitor
+ *
+ * Handles Solana **System Program** instructions (`transfer`, `transferWithSeed`).
+ * Converts native SOL transfers into synthetic WSOL edges so they can be
+ * integrated into the unified swap/trade flow graph.
+ */
 export class SystemVisitor implements InstructionVisitor {
-  private static SYS_ID = "11111111111111111111111111111111";
+  private static SYS_ID = "11111111111111111111111111111111"; // SystemProgram ID
 
+  /**
+   * Check if this visitor supports the given instruction.
+   * Matches SystemProgram by program name or programId.
+   */
   supports(ix: any) {
     return ix?.program === "system" || ix?.programId === SystemVisitor.SYS_ID;
   }
 
+  /**
+   * Visit a SystemProgram instruction and push transfer edges into the context.
+   *
+   * Supported:
+   * - transfer
+   * - transferWithSeed
+   *
+   * @param ix  Parsed instruction
+   * @param ctx Visit context (edge collector, logging, sequence counter)
+   */
   visit(ix: any, ctx: VisitContext) {
     const log = ctx.log ?? ((..._a: any[]) => {});
     const p = ix?.parsed;
     if (!p) return;
 
-    // On couvre les cas courants
+    // Handle common transfer instructions
     if (p.type === "transfer" || p.type === "transferWithSeed") {
       const info = p.info ?? {};
       const source =
@@ -27,8 +47,9 @@ export class SystemVisitor implements InstructionVisitor {
       if (!source || !destination) return;
       if (!Number.isFinite(lamports) || lamports <= 0) return;
 
-      const amount = lamports / 1e9; // SOL
+      const amount = lamports / 1e9; // convert lamports → SOL
 
+      // Push synthetic WSOL edge to unify with SPL-based flows
       ctx.pushEdge({
         seq: ctx.seq.v++,
         source,
@@ -39,7 +60,6 @@ export class SystemVisitor implements InstructionVisitor {
         programId: ix?.programId,
         depth: ctx.depth,
       });
-
 
       if (ctx.debug) {
         log("[SystemVisitor] transfer", {

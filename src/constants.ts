@@ -11,3 +11,4 @@ export const STABLES = new Set([
 ]);
 
 export const WSOL_DECIMALS = 9;
+export const LAMPORTS_PER_SOL = 1_000_000_000;

@@ -88,12 +88,12 @@ export class TokenToWsolStrategy implements LegStrategy {
       let windowOuts: TransferEdge[];
 
       if (typeof windowAroundIn === "number") {
-        // Fenêtre symétrique : robuste aux inversions d’ordre
+
         windowOuts = outs.filter(
           (o) => !usedOut.has(o.seq) && Math.abs(o.seq - inn.seq) <= windowAroundIn
         );
       } else {
-        // Look-back only : comportement historique
+       
         windowOuts = outs.filter(
           (o) => !usedOut.has(o.seq) && o.seq < inn.seq && inn.seq - o.seq <= windowTotalFromOut
         );
@@ -102,7 +102,7 @@ export class TokenToWsolStrategy implements LegStrategy {
       if (!windowOuts.length) continue;
 
       if (aggregateOuts) {
-        // Agrégation : somme tous les outs qualifiés
+
         const soldMint = windowOuts[0].mint;
         const total = windowOuts.reduce((sum, o) => {
           usedOut.add(o.seq);
@@ -117,7 +117,7 @@ export class TokenToWsolStrategy implements LegStrategy {
           path: [...windowOuts, inn],
         });
       } else {
-        // Mode par défaut : on prend l’OUT dominant
+
         const best = windowOuts.reduce((a, b) => (a.amount >= b.amount ? a : b));
         usedOut.add(best.seq);
 
