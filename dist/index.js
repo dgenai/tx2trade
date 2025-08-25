@@ -1,0 +1,73 @@
+import { SolanaRpcClient } from "./services/SolanaRpcClient.js";
+import { MetaplexMetadataService } from "./services/MetaplexMetadataService.js";
+import { transactionToSwapLegs_SOLBridge } from "./core/transactionToSwapLegs.js";
+import { legsToTradeActions } from "./core/actions.js";
+import { inferUserWallet } from "./core/inferUserWallet.js";
+import { chunkArray } from "./utils/helpers.js";
+export { SolanaRpcClient } from "./services/SolanaRpcClient.js";
+/**
+ * Convert a list of Solana transaction signatures into enriched trade actions.
+ * Now:
+ *  1) Fetch ALL transactions in batches
+ *  2) Parse AFTER everything is fetched
+ *  3) Enrich with Metaplex metadata
+ */
+export async function tx2trade(sigs, rpcEndpoint, opts = {}) {
+    const { debug = false, windowTotalFromOut = 500, requireAuthorityUserForOut = true, } = opts;
+    // Initialize Solana RPC client with retry & timeout strategy
+    const rpc = new SolanaRpcClient({
+        endpoint: rpcEndpoint,
+        timeoutMs: 25000,
+        maxRetries: 3,
+        retryBackoffMs: 300,
+        defaultCommitment: "confirmed",
+        log: (...args) => console.log(...args),
+    });
+    // Service for fetching and enriching with Metaplex token metadata
+    const metaSvc = new MetaplexMetadataService(rpc);
+    // 1) FETCH — Split signatures into batches to avoid RPC limits
+    const sigChunks = chunkArray(sigs, 50);
+    const fetched = [];
+    for (const chunk of sigChunks) {
+        const txs = await rpc.getTransactionsParsedBatch(chunk, 0);
+        for (let i = 0; i < chunk.length; i++) {
+            fetched.push({ sig: chunk[i], tx: txs[i] ?? null });
+        }
+    }
+    // 2) PARSE — Only after all tx are fetched
+    const allActions = [];
+    for (const { sig, tx } of fetched) {
+        if (!tx) {
+            console.warn(`⚠️ Transaction not found: ${sig}`);
+            continue;
+        }
+        try {
+            // Infer the user wallet involved
+            const userWallet = inferUserWallet(tx);
+            // Convert transaction into swap legs
+            const legs = transactionToSwapLegs_SOLBridge(tx, userWallet, {
+                windowTotalFromOut,
+                requireAuthorityUserForOut,
+                debug,
+            });
+            // Convert legs into high-level trade actions
+            const actions = legsToTradeActions(legs, {
+                txHash: sig,
+                wallet: userWallet,
+                blockTime: tx.blockTime,
+            });
+            if (debug) {
+                console.debug("tx2trade result", { sig, actions, legsCount: legs.length });
+            }
+            allActions.push(...actions);
+        }
+        catch (err) {
+            console.error(`❌ Error parsing TX ${sig}:`, err);
+        }
+    }
+    // 3) ENRICH — Enrich aggregated actions with token metadata
+    const metaMap = await metaSvc.fetchTokenMetadataMapFromActions(allActions);
+    const enriched = metaSvc.enrichActionsWithMetadata(allActions, metaMap);
+    return enriched; // Final aggregated & enriched trade history
+}
+//# sourceMappingURL=index.js.map
