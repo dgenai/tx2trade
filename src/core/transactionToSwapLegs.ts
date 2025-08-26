@@ -291,8 +291,7 @@ export function transactionToSwapLegs_SOLBridge(
 
   pushUserSolDeltaEdge(tx, edges, userWallet);
 
-  console.log("edges");
-  console.dir(edges, {depth:null}); 
+
 
 
   if (!edges.length) return [];
@@ -405,6 +404,5 @@ export function transactionToSwapLegs_SOLBridge(
     userWallet,
   });
 
-  console.dir(allLegs, {depth: null})
   return allLegs;
 }

@@ -208,8 +208,8 @@ export function transactionToSwapLegs_SOLBridge(tx, userWallet, opts) {
     const { edges } = buildEdgesAndIndex(tx, { debug });
     log("Edges built:", { count: edges.length });
     pushUserSolDeltaEdge(tx, edges, userWallet);
-    console.log("edges");
-    console.dir(edges, { depth: null });
+
+    
     if (!edges.length)
         return [];
     // 2) Collect user token accounts from balances + authorities
@@ -298,7 +298,8 @@ export function transactionToSwapLegs_SOLBridge(tx, userWallet, opts) {
         tags,
         userWallet,
     });
-    console.dir(allLegs, { depth: null });
+
+    
     return allLegs;
 }
 //# sourceMappingURL=transactionToSwapLegs.js.map

@@ -31,6 +31,34 @@ import { inferUserWallet } from "../src/core/inferUserWallet.js";
 
 import { ReportService } from "../src/services/ReportService.js";
 import { BinanceKlinesService } from "../src/services/BinanceKlinesService.js";
+import pLimit from "p-limit";
+
+function buildWindows(startTimeMs: number, endTimeMs: number, intervalMs = 60_000, maxCandles = 1000) {
+  const maxSpan = intervalMs * maxCandles;
+  const windows: { startMs: number; endMs: number }[] = [];
+  let curStart = startTimeMs;
+  while (curStart < endTimeMs) {
+    const curEnd = Math.min(curStart + maxSpan - 1, endTimeMs);
+    windows.push({ startMs: curStart, endMs: curEnd });
+    curStart = curEnd + 1;
+  }
+  return windows;
+}
+
+// limiteur de concurrence simple
+async function runWithLimit<T>(tasks: (() => Promise<T>)[], concurrency = 10): Promise<T[]> {
+  const results: T[] = [];
+  let index = 0;
+  async function worker() {
+    while (index < tasks.length) {
+      const i = index++;
+      results[i] = await tasks[i]();
+    }
+  }
+  const workers = Array.from({ length: concurrency }, () => worker());
+  await Promise.all(workers);
+  return results;
+}
 
 // ---------- CLI Flags definition ----------
 type CliFlags = {
@@ -206,24 +234,45 @@ async function main() {
     .filter((t): t is number => typeof t === "number" && t > 0);
 
   let candles: any[] = [];
+
   if (validBlockTimes.length > 0) {
     const minBlockTime = Math.min(...validBlockTimes);
     const maxBlockTime = Math.max(...validBlockTimes);
-
+  
     // Round to minute boundaries
     const startTimeMs = Math.floor(minBlockTime / 60) * 60 * 1000;
     const endTimeMs = (Math.floor(maxBlockTime / 60) + 1) * 60 * 1000;
-
+  
     const svc = new BinanceKlinesService({ market: "spot" });
-    candles = await svc.fetchKlinesRange({
-      symbol: "SOLUSDT",
-      interval: "1m",
-      startTimeMs,
-      endTimeMs,
+  
+    // 1. Construire les fenêtres de 1000 minutes max
+    const windows = buildWindows(startTimeMs, endTimeMs, 60_000, 1000);
+    if (debug) console.log(`📊 ${windows.length} fenêtre(s) à récupérer en parallèle`);
+  
+    // 2. Préparer les tâches
+    const tasks = windows.map(w => async () => {
+      if (debug) {
+        console.log(`⏳ Fetching window ${new Date(w.startMs).toISOString()} → ${new Date(w.endMs).toISOString()}`);
+      }
+      const batch = await svc.fetchKlinesRange({
+        symbol: "SOLUSDT",
+        interval: "1m",
+        startTimeMs: w.startMs,
+        endTimeMs: w.endMs,
+        limitPerCall: 1000,
+      });
+      return batch;
     });
-
+  
+    // 3. Lancer avec concurrence limitée
+    const results = await runWithLimit(tasks, 5);
+  
+    // 4. Fusionner + trier
+    candles = results.flat().sort((a, b) => a.openTime - b.openTime);
+  
     if (debug) console.log(`📈 Binance returned ${candles.length} candles (1m).`);
   }
+  
 
   // -------------------------------
   // 3) Parse into trade actions
