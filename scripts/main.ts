@@ -14,6 +14,9 @@
  * Example:
  *   ts-node src/app/main.ts --address <PUBKEY> --total 3000 --pageSize 1000
  */
+import { fileURLToPath } from "node:url";
+import { dirname, resolve } from "node:path";
+
 
 import clipboardy from "clipboardy";
 import dotenv from "dotenv";
@@ -115,7 +118,7 @@ Options:
 `);
 }
 
-const debug = true;
+const debug = false;
 
 /**
  * Main execution flow.
@@ -225,10 +228,12 @@ async function main() {
   // -------------------------------
   // 3) Parse into trade actions
   // -------------------------------
-  const allActions: any[] = [];
 
+  console.time("⏱ Total parsing");
+  
+  const allActions: any[] = [];
   for (const { sig, tx } of fetched) {
-    clipboardy.writeSync(JSON.stringify(tx, null, 2)); // Debug: copy raw tx to clipboard
+    //clipboardy.writeSync(JSON.stringify(tx, null, 2)); // Debug: copy raw tx to clipboard
 
     if (!tx) {
       if (debug) console.warn(`⚠️ Transaction not found: ${sig}`);
@@ -243,11 +248,12 @@ async function main() {
       const userWallet = inferUserWallet(tx);
       if (debug) console.log("👤 Inferred wallet:", userWallet);
 
-      const legs = transactionToSwapLegs_SOLBridge(tx, userWallet, {
+       const legs = transactionToSwapLegs_SOLBridge(tx, userWallet, {
         windowTotalFromOut: 500,
         requireAuthorityUserForOut: true,
         debug,
-      });
+      });  
+
       if (debug) console.log(`🔗 TX ${sig}: ${legs.length} legs`);
 
       const actions = legsToTradeActions(legs, {
@@ -258,11 +264,12 @@ async function main() {
       });
       if (debug) console.log(`📊 TX ${sig}: ${actions.length} actions`);
 
+
       allActions.push(...actions);
     } catch (err) {
       console.error(`❌ Error parsing TX ${sig}:`, err);
     }
-  }
+  } 
 
   // -------------------------------
   // 4) Enrich with metadata
@@ -270,6 +277,7 @@ async function main() {
   const metaMap = await metaSvc.fetchTokenMetadataMapFromActions(allActions);
   const enriched = metaSvc.enrichActionsWithMetadata(allActions, metaMap);
 
+  console.timeEnd("⏱ Total parsing");
   if (debug) {
     console.log("\n🧬 Actions + metadata:");
     console.log(JSON.stringify(enriched, null, 2));
@@ -296,6 +304,8 @@ async function main() {
     console.log(`📄 Report written to: ${outFile}`);
   }
 }
+
+//await pool.close();
 
 // Entrypoint
 main().catch((err) => {

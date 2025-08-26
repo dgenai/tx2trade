@@ -1,6 +1,6 @@
 import { PublicKey } from "@solana/web3.js";
 import { decodeMetaplexMetadataBase64 } from "../utils/borsh.js";
-import { METAPLEX_PROGRAM_ID, NATIVE_SOL } from "../constants.js";
+import { METAPLEX_PROGRAM_ID, WSOL_MINT } from "../constants.js";
 /**
  * Derive the PDA (Program Derived Address) of a Metaplex metadata account for a given mint.
  *
@@ -34,9 +34,9 @@ export class MetaplexMetadataService {
         for (const a of actions) {
             const s = a.sold?.address;
             const b = a.bought?.address;
-            if (s && s !== NATIVE_SOL)
+            if (s && s !== WSOL_MINT)
                 set.add(s);
-            if (b && b !== NATIVE_SOL)
+            if (b && b !== WSOL_MINT)
                 set.add(b);
         }
         return [...set];
@@ -48,7 +48,7 @@ export class MetaplexMetadataService {
      * @returns A mapping of mint address -> decoded metadata (name, symbol, uri)
      */
     async fetchTokenMetadataMapFromActions(actions) {
-        const mints = this.getUniqueMints(actions).filter((m) => m !== NATIVE_SOL);
+        const mints = this.getUniqueMints(actions).filter((m) => m !== WSOL_MINT);
         if (mints.length === 0)
             return {};
         // Derive PDAs for metadata accounts
@@ -99,7 +99,7 @@ export class MetaplexMetadataService {
             // Enrich sold token
             if (out.sold?.address) {
                 const mint = out.sold.address;
-                if (mint === NATIVE_SOL) {
+                if (mint === WSOL_MINT) {
                     (_a = out.sold).symbol ?? (_a.symbol = "SOL");
                     (_b = out.sold).name ?? (_b.name = "Solana");
                 }
@@ -116,7 +116,7 @@ export class MetaplexMetadataService {
             // Enrich bought token
             if (out.bought?.address) {
                 const mint = out.bought.address;
-                if (mint === NATIVE_SOL) {
+                if (mint === WSOL_MINT) {
                     (_c = out.bought).symbol ?? (_c.symbol = "SOL");
                     (_d = out.bought).name ?? (_d.name = "Solana");
                 }

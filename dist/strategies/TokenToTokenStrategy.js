@@ -1,8 +1,4 @@
-const WSOL_MINT = "So11111111111111111111111111111111111111112";
-const STABLES = new Set([
-    "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", // USDC
-    "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB", // USDT
-]);
+import { STABLES, WSOL_MINT } from "../constants.js";
 function inferType(soldMint, boughtMint) {
     const soldStable = STABLES.has(soldMint);
     const boughtStable = STABLES.has(boughtMint);

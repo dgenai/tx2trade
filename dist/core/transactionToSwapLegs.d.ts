@@ -8,6 +8,7 @@ type Options = {
     minWsolLamports?: number;
     dustRelPct?: number;
     maxPasses?: number;
+    windowAroundIn?: number;
 };
 /**
  * New engine:

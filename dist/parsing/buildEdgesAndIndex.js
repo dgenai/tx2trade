@@ -3,6 +3,7 @@ import { applyVisitors } from "../visitor/InstructionVisitor.js";
 import { TokenVisitor } from "../visitor/TokenVisitor.js";
 import { AssociatedTokenVisitor } from "../visitor/AssociatedTokenVisitor.js";
 import { NoopVisitor } from "../visitor/NoopVisitor.js";
+import { SystemVisitor } from "../visitor/SystemVisitor.js";
 /**
  * Build the transfer edges and account index from a parsed Solana transaction.
  *
@@ -45,6 +46,7 @@ export function buildEdgesAndIndex(tx, opts) {
     const visitors = [
         new TokenVisitor(),
         new AssociatedTokenVisitor(),
+        new SystemVisitor(),
         new NoopVisitor(),
     ];
     log("Applying visitors");

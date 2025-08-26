@@ -1,5 +1,4 @@
 export function blockTimeToDate(blockTime) {
-    // blockTime est en secondes → on multiplie par 1000 pour passer en ms
     return new Date(blockTime * 1000);
 }
 export function chunkArray(arr, size) {

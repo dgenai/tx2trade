@@ -9,6 +9,12 @@ export interface VisitContext {
     noteAccount: (addr: string, info: Partial<TokAccInfo>) => void;
     debug?: boolean;
     log?: (...args: any[]) => void;
+    groups?: Array<{
+        index: number;
+        startSeq: number;
+        endSeq: number;
+        outerProgramId?: string;
+    }>;
 }
 export interface InstructionVisitor {
     supports(ix: any): boolean;
