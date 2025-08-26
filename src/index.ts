@@ -32,7 +32,7 @@ function buildWindows(startTimeMs: number, endTimeMs: number, intervalMs = 60_00
 }
 
 // limiteur de concurrence simple
-async function runWithLimit<T>(tasks: (() => Promise<T>)[], concurrency = 10): Promise<T[]> {
+async function runWithLimit<T>(tasks: (() => Promise<T>)[], concurrency = 20): Promise<T[]> {
   const results: T[] = [];
   let index = 0;
   async function worker() {

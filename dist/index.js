@@ -18,7 +18,7 @@ function buildWindows(startTimeMs, endTimeMs, intervalMs = 60000, maxCandles = 1
     return windows;
 }
 // limiteur de concurrence simple
-async function runWithLimit(tasks, concurrency = 10) {
+async function runWithLimit(tasks, concurrency = 20) {
     const results = [];
     let index = 0;
     async function worker() {
