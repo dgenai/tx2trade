@@ -59,9 +59,11 @@ export class BinanceKlinesService {
         if (endTimeMs <= startTimeMs) {
             return [];
         }
+        console.log(`[BinanceKlinesService] Fetching ${symbol} ${interval} from ${new Date(startTimeMs).toISOString()} to ${new Date(endTimeMs).toISOString()}`);
         const out = [];
         let nextStart = startTimeMs;
         const step = INTERVAL_MS[interval];
+        let callCount = 0;
         while (nextStart <= endTimeMs) {
             const search = new URLSearchParams({
                 symbol,
@@ -71,29 +73,36 @@ export class BinanceKlinesService {
                 limit: String(limit),
             });
             const url = `${this.baseUrl}${this.endpointPath}?${search.toString()}`;
+            console.log(`[BinanceKlinesService] Requesting: ${url}`);
             const klines = await this._getWithRetry(url);
+            callCount++;
+            console.log(`[BinanceKlinesService] Batch #${callCount}: received ${klines?.length ?? 0} candles`);
             if (!Array.isArray(klines) || klines.length === 0) {
-                break; // no more data
+                console.log(`[BinanceKlinesService] No more data, stopping.`);
+                break;
             }
-            // map to Candlestick + deduplication
             for (const k of klines) {
                 const c = this._mapTuple(k);
                 if (c.openTime > endTimeMs)
-                    break; // stop if beyond end
+                    break;
                 const last = out[out.length - 1];
                 if (!last || last.openTime < c.openTime) {
                     out.push(c);
                 }
             }
             const lastOpen = out[out.length - 1]?.openTime;
-            if (lastOpen == null)
+            if (lastOpen == null) {
+                console.log(`[BinanceKlinesService] No last candle, stopping.`);
                 break;
-            nextStart = lastOpen + step; // advance beyond last candle
+            }
+            nextStart = lastOpen + step;
             if (klines.length < limit && nextStart > endTimeMs) {
-                break; // reached end
+                console.log(`[BinanceKlinesService] Reached end of range.`);
+                break;
             }
             await this._sleep(this.minDelay);
         }
+        console.log(`[BinanceKlinesService] Done. Total candles: ${out.length}`);
         return out;
     }
     /**
