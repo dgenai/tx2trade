@@ -6,6 +6,31 @@ import { inferUserWallet } from "./core/inferUserWallet.js";
 import { chunkArray } from "./utils/helpers.js";
 import { BinanceKlinesService } from "./services/BinanceKlinesService.js";
 export { SolanaRpcClient } from "./services/SolanaRpcClient.js";
+function buildWindows(startTimeMs, endTimeMs, intervalMs = 60000, maxCandles = 1000) {
+    const maxSpan = intervalMs * maxCandles;
+    const windows = [];
+    let curStart = startTimeMs;
+    while (curStart < endTimeMs) {
+        const curEnd = Math.min(curStart + maxSpan - 1, endTimeMs);
+        windows.push({ startMs: curStart, endMs: curEnd });
+        curStart = curEnd + 1;
+    }
+    return windows;
+}
+// limiteur de concurrence simple
+async function runWithLimit(tasks, concurrency = 10) {
+    const results = [];
+    let index = 0;
+    async function worker() {
+        while (index < tasks.length) {
+            const i = index++;
+            results[i] = await tasks[i]();
+        }
+    }
+    const workers = Array.from({ length: concurrency }, () => worker());
+    await Promise.all(workers);
+    return results;
+}
 /**
  * Convert a list of Solana transaction signatures into enriched trade actions.
  * Now:
@@ -49,12 +74,28 @@ export async function tx2trade(sigs, rpcEndpoint, opts = {}) {
         const startTimeMs = Math.floor(minBlockTime / 60) * 60 * 1000;
         const endTimeMs = (Math.floor(maxBlockTime / 60) + 1) * 60 * 1000;
         const svc = new BinanceKlinesService({ market: "spot" });
-        candles = await svc.fetchKlinesRange({
-            symbol: "SOLUSDT",
-            interval: "1m",
-            startTimeMs,
-            endTimeMs,
+        // 1. Construire les fenêtres de 1000 minutes max
+        const windows = buildWindows(startTimeMs, endTimeMs, 60000, 1000);
+        if (debug)
+            console.log(`📊 ${windows.length} fenêtre(s) à récupérer en parallèle`);
+        // 2. Préparer les tâches
+        const tasks = windows.map(w => async () => {
+            if (debug) {
+                console.log(`⏳ Fetching window ${new Date(w.startMs).toISOString()} → ${new Date(w.endMs).toISOString()}`);
+            }
+            const batch = await svc.fetchKlinesRange({
+                symbol: "SOLUSDT",
+                interval: "1m",
+                startTimeMs: w.startMs,
+                endTimeMs: w.endMs,
+                limitPerCall: 1000,
+            });
+            return batch;
         });
+        // 3. Lancer avec concurrence limitée
+        const results = await runWithLimit(tasks, 5);
+        // 4. Fusionner + trier
+        candles = results.flat().sort((a, b) => a.openTime - b.openTime);
         if (debug)
             console.log(`📈 Binance returned ${candles.length} candles (1m).`);
     }
