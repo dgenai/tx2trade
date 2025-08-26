@@ -5,6 +5,7 @@ import { transactionToSwapLegs_SOLBridge } from "./core/transactionToSwapLegs.js
 import { legsToTradeActions } from "./core/actions.js";
 import { inferUserWallet } from "./core/inferUserWallet.js";
 import { chunkArray } from "./utils/helpers.js";
+import { BinanceKlinesService } from "./services/BinanceKlinesService.js";
 
 /**
  * Options for customizing transaction-to-trade parsing.
@@ -59,6 +60,35 @@ export async function tx2trade(
     }
   }
 
+
+  // -------------------------------
+  // 2) Retrieve SOL/USDT candles
+  // -------------------------------
+  const validBlockTimes = fetched
+    .map(f => f.tx?.blockTime)
+    .filter((t): t is number => typeof t === "number" && t > 0);
+
+  let candles: any[] = [];
+  if (validBlockTimes.length > 0) {
+    const minBlockTime = Math.min(...validBlockTimes);
+    const maxBlockTime = Math.max(...validBlockTimes);
+
+    // Round to minute boundaries
+    const startTimeMs = Math.floor(minBlockTime / 60) * 60 * 1000;
+    const endTimeMs = (Math.floor(maxBlockTime / 60) + 1) * 60 * 1000;
+
+    const svc = new BinanceKlinesService({ market: "spot" });
+    candles = await svc.fetchKlinesRange({
+      symbol: "SOLUSDT",
+      interval: "1m",
+      startTimeMs,
+      endTimeMs,
+    });
+
+    if (debug) console.log(`📈 Binance returned ${candles.length} candles (1m).`);
+  }
+  
+
   // 2) PARSE — Only after all tx are fetched
   const allActions: any[] = [];
 
@@ -84,6 +114,7 @@ export async function tx2trade(
         txHash: sig,
         wallet: userWallet,
         blockTime: tx.blockTime,
+        candles,
       });
 
       if (debug) {

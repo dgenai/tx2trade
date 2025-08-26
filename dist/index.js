@@ -4,6 +4,7 @@ import { transactionToSwapLegs_SOLBridge } from "./core/transactionToSwapLegs.js
 import { legsToTradeActions } from "./core/actions.js";
 import { inferUserWallet } from "./core/inferUserWallet.js";
 import { chunkArray } from "./utils/helpers.js";
+import { BinanceKlinesService } from "./services/BinanceKlinesService.js";
 export { SolanaRpcClient } from "./services/SolanaRpcClient.js";
 /**
  * Convert a list of Solana transaction signatures into enriched trade actions.
@@ -34,6 +35,29 @@ export async function tx2trade(sigs, rpcEndpoint, opts = {}) {
             fetched.push({ sig: chunk[i], tx: txs[i] ?? null });
         }
     }
+    // -------------------------------
+    // 2) Retrieve SOL/USDT candles
+    // -------------------------------
+    const validBlockTimes = fetched
+        .map(f => f.tx?.blockTime)
+        .filter((t) => typeof t === "number" && t > 0);
+    let candles = [];
+    if (validBlockTimes.length > 0) {
+        const minBlockTime = Math.min(...validBlockTimes);
+        const maxBlockTime = Math.max(...validBlockTimes);
+        // Round to minute boundaries
+        const startTimeMs = Math.floor(minBlockTime / 60) * 60 * 1000;
+        const endTimeMs = (Math.floor(maxBlockTime / 60) + 1) * 60 * 1000;
+        const svc = new BinanceKlinesService({ market: "spot" });
+        candles = await svc.fetchKlinesRange({
+            symbol: "SOLUSDT",
+            interval: "1m",
+            startTimeMs,
+            endTimeMs,
+        });
+        if (debug)
+            console.log(`📈 Binance returned ${candles.length} candles (1m).`);
+    }
     // 2) PARSE — Only after all tx are fetched
     const allActions = [];
     for (const { sig, tx } of fetched) {
@@ -55,6 +79,7 @@ export async function tx2trade(sigs, rpcEndpoint, opts = {}) {
                 txHash: sig,
                 wallet: userWallet,
                 blockTime: tx.blockTime,
+                candles,
             });
             if (debug) {
                 console.debug("tx2trade result", { sig, actions, legsCount: legs.length });
