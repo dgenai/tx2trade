@@ -123,7 +123,7 @@ export async function tx2trade(
         interval: "1m",
         startTimeMs: w.startMs,
         endTimeMs: w.endMs,
-        limitPerCall: 1000,
+        limitPerCall: 1500,
       });
       return batch;
     });

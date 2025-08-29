@@ -171,7 +171,7 @@ export class SolanaRpcClient {
     }
     async fetchAllSignaturesWithPagination(address, opts) {
         const totalTarget = Math.max(1, opts.total);
-        const pageSize = Math.min(1000, Math.max(1, opts.pageSize ?? Math.min(1000, totalTarget)));
+        const pageSize = Math.min(100, Math.max(1, opts.pageSize ?? Math.min(100, totalTarget)));
         let before = opts.before;
         const until = opts.until;
         const commitment = opts.commitment;

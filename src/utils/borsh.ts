@@ -31,7 +31,6 @@ export function readU32LE(buf: Buffer, offset: number): number {
   
     r = readBorshString(buf, o);
     out.uri = r.value; o = r.next;
-  
     return out;
   }
   

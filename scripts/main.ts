@@ -135,8 +135,8 @@ Options:
   -s, --sigs         Comma-separated list of signatures
   -a, --address      Address to fetch signatures from
   -l, --limit        Single-page cap (legacy, max 1000). Prefer --total.
-      --total        Total signatures across pages (default: 3000)
-      --pageSize     RPC page size (1..1000). Default: min(1000, total)
+      --total        Total signatures across pages (default: 50)
+      --pageSize     RPC page size (1..1000). Default: min(100, total)
       --before       Return signatures before this one
       --until        Return signatures until this one
   -c, --commitment   processed | confirmed | finalized
@@ -146,7 +146,7 @@ Options:
 `);
 }
 
-const debug = false;
+const debug = true;
 
 /**
  * Main execution flow.
@@ -183,13 +183,13 @@ async function main() {
 
   // ---- Address mode with pagination ----
   if (!sigs && flags.address) {
-    const total = Math.max(1, flags.total ?? flags.limit ?? 3000);
-    const pageSize = flags.pageSize;
+    const total = Math.max(1, flags.total ?? flags.limit ?? 50);
+    const pageSize = flags.pageSize ?? Math.min(100, total);
 
     if (debug) {
       console.log(
         `🔎 Fetching up to ${total} signatures for ${flags.address} ` +
-        `(pageSize=${pageSize ?? Math.min(1000, total)}, commitment=${flags.commitment ?? "confirmed"})`
+        `(pageSize=${pageSize ?? Math.min(50, total)}, commitment=${flags.commitment ?? "confirmed"})`
       );
     }
 
@@ -245,11 +245,11 @@ async function main() {
   
     const svc = new BinanceKlinesService({ market: "spot" });
   
-    // 1. Construire les fenêtres de 1000 minutes max
-    const windows = buildWindows(startTimeMs, endTimeMs, 60_000, 1000);
-    if (debug) console.log(`📊 ${windows.length} fenêtre(s) à récupérer en parallèle`);
+    // 1. Build 1500 interval windows
+    const windows = buildWindows(startTimeMs, endTimeMs, 60_000, 1500);
+    if (debug) console.log(`📊 ${windows.length} window to fetch //`);
   
-    // 2. Préparer les tâches
+    // 2. tasks setup
     const tasks = windows.map(w => async () => {
       if (debug) {
         console.log(`⏳ Fetching window ${new Date(w.startMs).toISOString()} → ${new Date(w.endMs).toISOString()}`);
@@ -259,15 +259,15 @@ async function main() {
         interval: "1m",
         startTimeMs: w.startMs,
         endTimeMs: w.endMs,
-        limitPerCall: 1000,
+        limitPerCall: 1500,
       });
       return batch;
     });
   
-    // 3. Lancer avec concurrence limitée
+    // 3. run concurrently
     const results = await runWithLimit(tasks, 5);
   
-    // 4. Fusionner + trier
+    // 4. join & sort
     candles = results.flat().sort((a, b) => a.openTime - b.openTime);
   
     if (debug) console.log(`📈 Binance returned ${candles.length} candles (1m).`);
