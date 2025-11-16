@@ -36,7 +36,7 @@ export class TokenVisitor {
                 return;
             const decimals = ctx.accountIndex.get(source)?.decimals ??
                 ctx.accountIndex.get(destination)?.decimals ??
-                (mint === WSOL_MINT ? 9 : undefined);
+                (mint === WSOL_MINT ? 9 : 0);
             const amount = num(info?.tokenAmount?.uiAmount) ||
                 (info?.amount != null
                     ? decimals != null
@@ -52,6 +52,7 @@ export class TokenVisitor {
                 authority: info.authority,
                 programId: ix?.programId,
                 depth: ctx.depth,
+                decimals
             });
             if (ctx.debug) {
                 log("[TokenVisitor] Transfer", {

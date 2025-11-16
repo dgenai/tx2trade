@@ -7,7 +7,7 @@ export type EnrichedAction = {
   txHash: string;
   wallet: string;
   blockTime?: number | null; // epoch seconds
-  type: string;              // "BUY" | "SELL"
+  type: string;              // "BUY" | "SELL" | "TRANSFER" | etc.
   amount?: number;
   tokenSymbol?: string;
   tokenMint?: string;
@@ -34,6 +34,34 @@ export type ReportOptions = {
   outFile?: string;
   title?: string;
 };
+
+async function fetchTokenMetadataBatch(mints: string[]): Promise<Record<string, string>> {
+  if (mints.length === 0) return {};
+
+  const batchSize = 30;
+  const results: Record<string, string> = {};
+
+  for (let i = 0; i < mints.length; i += batchSize) {
+    const chunk = mints.slice(i, i + batchSize);
+    const url =
+      "https://api.geckoterminal.com/api/v2/networks/solana/tokens/multi/" +
+      chunk.join("%2C") +
+      "?include=top_pools&include_composition=false";
+
+    const res = await fetch(url);
+    const json = await res.json();
+
+    if (Array.isArray(json.data)) {
+      for (const t of json.data) {
+        const attrs = t.attributes;
+        if (!attrs) continue;
+        results[attrs.address] = attrs.image_url || "";
+      }
+    }
+  }
+
+  return results;
+}
 
 /** Convertit un TradeAction vers EnrichedAction, en normalisant les nombres. */
 function normalizeAction(input: TradeAction): EnrichedAction {
@@ -123,7 +151,7 @@ export class ReportService {
     return `<span class="token"><span class="token-name">${this.esc(label)}</span>${copyBtn}</span>`;
   }
 
-  generateHtml(_actions: TradeAction[], opts?: ReportOptions): string {
+  async generateHtml(_actions: TradeAction[], opts?: ReportOptions):  Promise<string>  {
     const actions = _actions.map(normalizeAction);
     const title = opts?.title ?? "Solana Trades Report";
 
@@ -151,6 +179,9 @@ export class ReportService {
       return (a.txHash || "").localeCompare(b.txHash || "");
     });
 
+    // -----------------------------
+    // TABLE rows
+    // -----------------------------
     const rows = sorted
       .map((a) => {
         const when = fmtDate(a.blockTime);
@@ -217,6 +248,122 @@ export class ReportService {
       })
       .join("");
 
+    // -----------------------------
+    // GRAPH DATA (option 4: token → token)
+    // -----------------------------
+    type GraphNode = {
+      id: string;
+      label: string;
+      symbol?: string;
+      name?: string;
+      totalCount: number;
+      buyCount: number;
+      sellCount: number;
+      transferCount: number;
+      icon?: string,
+    };
+
+    type GraphLink = {
+      source: string;
+      target: string;
+      type: string;
+      count: number;
+      totalSoldAmount: number;
+      totalBoughtAmount: number;
+    };
+
+    const nodeMap = new Map<string, GraphNode>();
+    const linkMap = new Map<string, GraphLink>();
+
+    const registerNode = (
+      mint: string | undefined,
+      symbol: string | undefined,
+      name: string | undefined,
+      actionType: string,
+      role: "sold" | "bought" | "transfer"
+    ) => {
+      if (!mint) return;
+      const key = mint;
+      let node = nodeMap.get(key);
+      if (!node) {
+        node = {
+          id: key,
+          label: symbol || name || this.short(key),
+          symbol,
+          name,
+          totalCount: 0,
+          buyCount: 0,
+          sellCount: 0,
+          transferCount: 0,
+        };
+        nodeMap.set(key, node);
+      }
+      node.totalCount++;
+      const t = actionType.toUpperCase();
+      if (t === "BUY" && role === "bought") node.buyCount++;
+      if (t === "SELL" && role === "sold") node.sellCount++;
+      if (t === "TRANSFER" && role === "sold") node.transferCount++;
+    };
+
+    for (const a of actions) {
+      const t = (a.type || "").toUpperCase();
+      const soldMint = a.soldMint;
+      const boughtMint = a.boughtMint;
+      const soldAmount = a.soldAmount ?? 0;
+      const boughtAmount = a.boughtAmount ?? 0;
+
+      // Nodes : on enregistre tous les tokens vus comme sold / bought
+      registerNode(soldMint, a.soldSymbol, a.soldName, t, "sold");
+      registerNode(boughtMint, a.boughtSymbol, a.boughtName, t, "bought");
+
+      // Liens : uniquement quand les deux côtés sont présents (relation entre tokens)
+      if (soldMint && boughtMint) {
+        const key = `${soldMint}__${boughtMint}__${t}`;
+        let link = linkMap.get(key);
+        if (!link) {
+          link = {
+            source: soldMint,
+            target: boughtMint,
+            type: t,
+            count: 0,
+            totalSoldAmount: 0,
+            totalBoughtAmount: 0,
+          };
+          linkMap.set(key, link);
+        }
+        link.count++;
+        link.totalSoldAmount += soldAmount || 0;
+        link.totalBoughtAmount += boughtAmount || 0;
+      }
+    }
+
+    const mintList = Array.from(nodeMap.keys());
+const mintToIcon = await fetchTokenMetadataBatch(mintList);
+
+// Inject icons
+for (const n of nodeMap.values()) {
+  n.icon = mintToIcon[n.id];
+}
+
+    const graphNodes = Array.from(nodeMap.values());
+    const graphLinks = Array.from(linkMap.values());
+
+function safeJson(obj: any): string {
+  return JSON.stringify(obj)
+    .replace(/</g, "\\u003c")
+    .replace(/>/g, "\\u003e")
+    .replace(/&/g, "\\u0026")
+    .replace(/\u2028/g, "\\u2028")
+    .replace(/\u2029/g, "\\u2029");
+}
+
+const graphDataJson = safeJson({
+  nodes: graphNodes,
+  links: graphLinks,
+});
+
+
+
     const html = `<!doctype html>
 <html lang="fr">
 <head>
@@ -258,6 +405,65 @@ export class ReportService {
 
   .chip { display:inline-flex; align-items:center; gap:6px; background: linear-gradient(135deg, rgba(127,90,240,.18), rgba(42,195,222,.18)); border: 1px solid rgba(127,90,240,.35); border-radius: 12px; padding: 4px 10px; font-weight: 600; font-size: 12px; margin-right: 6px; box-shadow: 0 0 0 1px rgba(255,255,255,0.02) inset; }
 
+  /* Graph section */
+  .graph-section { margin-bottom: 26px; }
+  .graph-section h2 { margin: 0 0 4px; font-size: 18px; }
+  .graph-section .muted { color: var(--muted); font-size: 12px; }
+  #trade-graph {
+    margin-top: 10px;
+    border-radius: 20px;
+    border: 1px solid var(--border);
+    background:
+      radial-gradient(700px 400px at 10% 10%, rgba(127,90,240,0.12), transparent 60%),
+      radial-gradient(700px 400px at 90% 90%, rgba(42,195,222,0.12), transparent 60%),
+      radial-gradient(500px 300px at 50% 10%, rgba(44,182,125,0.10), transparent 60%);
+    min-height: 360px;
+    position: relative;
+    overflow: hidden;
+  }
+  #trade-graph svg { width: 100%; height: 100%; display:block; }
+
+  .graph-tooltip {
+    position: absolute;
+    pointer-events: none;
+    background: rgba(15,23,42,0.95);
+    border-radius: 10px;
+    border: 1px solid rgba(148,163,184,0.5);
+    padding: 8px 10px;
+    font-size: 12px;
+    color: var(--text);
+    box-shadow: 0 0 18px rgba(15,23,42,0.8);
+    opacity: 0;
+    transform: translate3d(0,0,0);
+    transition: opacity .12s ease-out;
+    z-index: 10;
+  }
+  .graph-tooltip .title { font-weight: 600; margin-bottom: 4px; }
+  .graph-tooltip .line { display:flex; justify-content:space-between; gap:8px; }
+
+  .link-line {
+    stroke: rgba(148,163,184,0.6);
+    stroke-opacity: 0.7;
+  }
+  .link-buy { stroke: rgba(44,182,125,0.9); }
+  .link-sell { stroke: rgba(229,115,115,0.9); }
+  .link-transfer { stroke: rgba(127,90,240,0.9); stroke-dasharray: 4 2; }
+
+  .node-circle {
+    fill: rgba(127,90,240,0.9);
+    stroke: rgba(255,255,255,0.32);
+    stroke-width: 1;
+  }
+  .node-label {
+    fill: #e5e9f0;
+    font-size: 11px;
+    pointer-events: none;
+    text-shadow:
+      0 0 2px rgba(10,10,10,0.9),
+      0 0 3px rgba(10,10,10,0.9);
+  }
+
+  
   /* Table (one row per action) */
   .table-wrap { background: var(--panel); border: 1px solid var(--border); border-radius: 20px; overflow: hidden; }
   table { width: 100%; border-collapse: collapse; }
@@ -278,6 +484,8 @@ export class ReportService {
   .pill.buy  { border-color: rgba(44,182,125,.6); }
   .pill.sell { border-color: rgba(229,115,115,.6); }
   .pill.swap { border-color: rgba(42,195,222,.6); }
+  .pill.transfer { border-color: rgba(127,90,240,.7); }
+
   .num { text-align:right; font-variant-numeric: tabular-nums; }
 
   .token { display:inline-flex; align-items:center; gap:8px; }
@@ -323,6 +531,17 @@ export class ReportService {
       </div>
     </header>
 
+    <section class="graph-section">
+      <h2>Token flow graph</h2>
+      <p class="muted">
+        Relations between <strong>sold</strong> and <strong>bought</strong> tokens (BUY / SELL). Transfers feed the per-token metrics.
+      </p>
+      <div id="trade-graph"></div>
+      
+    </section>
+
+    
+
     <div class="table-wrap">
       <table>
       <thead>
@@ -346,33 +565,213 @@ export class ReportService {
     <footer>Generated at ${new Date().toLocaleString()}</footer>
   </div>
 
+
+
+  
+
+  <script src="https://d3js.org/d3.v7.min.js"></script>
+
+
   <script>
-    // Copy to clipboard (event delegation) - JS pur
-    document.addEventListener('click', function (e) {
-      const target = e.target;
-      const btn = target && target.closest ? target.closest('button.copy') : null;
-      if (!btn) return;
-      const text = btn.getAttribute('data-copy');
-      if (!text) return;
-      navigator.clipboard?.writeText(text).then(() => {
-        btn.classList.add('ok');
-        btn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M9 16.2 4.8 12l-1.4 1.4L9 19 21 7l-1.4-1.4z"/></svg>';
-        setTimeout(() => {
-          btn.classList.remove('ok');
-          btn.innerHTML = btn.classList.contains('token-copy')
-            ? '<svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M16 1H8a2 2 0 0 0-2 2v2h2V3h8v8h2V3a2 2 0 0 0-2-2zm-3 6H5a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2zm0 12H5V9h8v10z"/></svg>'
-            : '<svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M16 1H8a2 2 0 0 0-2 2v2h2V3h8v8h2V3a2 2 0 0 0-2-2zm-3 6H5a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2zm0 12H5V9h8v10z"/></svg>';
-        }, 800);
-      });
-    }, { passive: true });
-  </script>
+(function() {
+
+const graphData = ${graphDataJson};
+
+  const container = document.getElementById('trade-graph');
+  if (!container || !graphData || !Array.isArray(graphData.nodes) || graphData.nodes.length === 0) {
+    if (container) {
+      container.innerHTML = '<div style="padding:12px; font-size:12px; color:var(--muted);">No token relationships to display.</div>';
+    }
+    return;
+  }
+
+  const width = container.clientWidth || 900;
+  const height = container.clientHeight || 380;
+
+  const svg = d3.select(container)
+    .append('svg')
+    .attr('viewBox', '0 0 ' + width + ' ' + height)
+    .attr('preserveAspectRatio', 'xMidYMid meet');
+
+  const nodes = graphData.nodes.map(d => Object.assign({}, d));
+  const links = graphData.links.map(d => Object.assign({}, d));
+
+  const maxCount = d3.max(nodes, d => d.totalCount) || 1;
+  const sizeScale = d3.scaleSqrt().domain([1, maxCount]).range([10, 40]);
+
+const linkWidth = d3.scaleLinear()
+  .domain([1, d3.max(links, function(d){ return d.count; }) || 1])
+  .range([0.7, 4]);
+
+// LINKS directionnels
+const link = svg.append("g")
+  .attr("class", "links")
+  .selectAll("line")
+  .data(links)
+  .enter()
+  .append("line")
+  .attr("stroke-width", function(d){ return linkWidth(d.count); })
+  .attr("stroke", function(d){
+    var t = (d.type || "").toUpperCase();
+    if (t === "BUY") return "rgba(44,182,125,0.85)";   // vert
+    if (t === "SELL") return "rgba(229,115,115,0.85)"; // rouge
+    return "rgba(127,90,240,0.85)";
+  });
+
+// NODES
+const node = svg.append("g")
+  .attr("class", "nodes")
+  .selectAll("g")
+  .data(nodes)
+  .enter()
+  .append("g")
+  .call(
+    d3.drag()
+      .on("start", dragstarted)
+      .on("drag", dragged)
+      .on("end", dragended)
+  );
+
+// clipPath circulaire
+node.append("clipPath")
+  .attr("id", function(d){ return "clip-" + d.id; })
+  .append("circle")
+  .attr("r", function(d){ return sizeScale(d.totalCount); });
+
+// cercle de bordure
+node.append("circle")
+  .attr("class", "node-border")
+  .attr("r", function(d){ return sizeScale(d.totalCount); })
+  .attr("stroke", "rgba(255,255,255,0.6)")
+  .attr("stroke-width", 2)
+  .attr("fill", "none");
+
+// image
+node.append("image")
+  .attr("href", function(d){ return d.icon || null; })
+  .attr("x", function(d){ return -sizeScale(d.totalCount); })
+  .attr("y", function(d){ return -sizeScale(d.totalCount); })
+  .attr("width", function(d){ return sizeScale(d.totalCount) * 2; })
+  .attr("height", function(d){ return sizeScale(d.totalCount) * 2; })
+  .attr("clip-path", function(d){ return "url(#clip-" + d.id + ")"; })
+  .attr("preserveAspectRatio", "xMidYMid slice");
+
+// label
+node.append("text")
+  .attr("class", "node-label")
+  .attr("text-anchor", "middle")
+  .attr("dy", function(d){ return sizeScale(d.totalCount) + 12; })
+  .text(function(d){
+    if (d.symbol) return d.symbol;
+    if (d.label) return d.label;
+    if (d.id) return d.id.slice(0,4) + "…" + d.id.slice(-3);
+    return "?";
+  });
+
+// TOOLTIP
+const tooltip = document.createElement("div");
+tooltip.className = "graph-tooltip";
+container.appendChild(tooltip);
+
+function showTooltip(evt, d){
+  tooltip.innerHTML =
+    '<div class="title">' + (d.symbol || d.name || d.id) + '</div>' +
+    '<div class="line"><span>Total</span><span>' + (d.totalCount || 0) + '</span></div>' +
+    '<div class="line"><span>Buys</span><span>' + (d.buyCount || 0) + '</span></div>' +
+    '<div class="line"><span>Sells</span><span>' + (d.sellCount || 0) + '</span></div>' +
+    '<div class="line"><span>Transfers</span><span>' + (d.transferCount || 0) + '</span></div>';
+
+  var rect = container.getBoundingClientRect();
+  tooltip.style.left = (evt.clientX - rect.left + 12) + "px";
+  tooltip.style.top = (evt.clientY - rect.top + 12) + "px";
+  tooltip.style.opacity = "1";
+}
+
+function hideTooltip(){
+  tooltip.style.opacity = "0";
+}
+
+node.on("mouseenter", function(evt, d){ showTooltip(evt, d); });
+node.on("mouseleave", function(){ hideTooltip(); });
+node.on("mousemove", function(evt, d){ showTooltip(evt, d); });
+
+// SIMULATION
+const simulation = d3.forceSimulation(nodes)
+  .force("link", d3.forceLink(links).id(function(d){ return d.id; }).distance(130).strength(0.35))
+  .force("charge", d3.forceManyBody().strength(-260))
+  .force("center", d3.forceCenter(width / 2, height / 2))
+  .force("collision", d3.forceCollide().radius(function(d){ return sizeScale(d.totalCount) + 6; }))
+  .on("tick", ticked);
+
+function ticked(){
+  link
+    .attr("x1", function(d){ return d.source.x; })
+    .attr("y1", function(d){ return d.source.y; })
+    .attr("x2", function(d){ return d.target.x; })
+    .attr("y2", function(d){ return d.target.y; });
+
+  node.attr("transform", function(d){
+    return "translate(" + d.x + "," + d.y + ")";
+  });
+}
+
+function dragstarted(evt, d){
+  if (!evt.active) simulation.alphaTarget(0.2).restart();
+  d.fx = d.x;
+  d.fy = d.y;
+}
+
+function dragged(evt, d){
+  d.fx = evt.x;
+  d.fy = evt.y;
+}
+
+function dragended(evt, d){
+  if (!evt.active) simulation.alphaTarget(0);
+  d.fx = null;
+  d.fy = null;
+}
+
+
+})();
+
+// Copy to clipboard
+document.addEventListener('click', function (e) {
+  const target = e.target;
+  const btn = target && target.closest ? target.closest('button.copy') : null;
+  if (!btn) return;
+
+  const text = btn.getAttribute('data-copy');
+  if (!text) return;
+
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(() => onCopied(btn));
+  } else {
+    onCopied(btn);
+  }
+
+  function onCopied(button) {
+    button.classList.add('ok');
+    button.innerHTML =
+      '<svg width="14" height="14" viewBox="0 0 24 24"><path fill="currentColor" d="M9 16.2 4.8 12l-1.4 1.4L9 19 21 7l-1.4-1.4z"/></svg>';
+
+    setTimeout(() => {
+      button.classList.remove('ok');
+      button.innerHTML = button.classList.contains('token-copy')
+        ? '<svg width="14" height="14" viewBox="0 0 24 24"><path fill="currentColor" d="M16 1H8a2 2 0 0 0-2 2v2h2V3h8v8h2V3a2 2 0 0 0-2-2zm-3 6H5a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2zm0 12H5V9h8v10z"/></svg>'
+        : '<svg width="16" height="16" viewBox="0 0 24 24"><path fill="currentColor" d="M16 1H8a2 2 0 0 0-2 2v2h2V3h8v8h2V3a2 2 0 0 0-2-2zm-3 6H5a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2zm0 12H5V9h8v10z"/></svg>';
+    }, 800);
+  }
+}, { passive: true });
+</script>
+
 </body>
 </html>`;
     return html;
   }
 
   async writeHtml(actions: TradeAction[], opts?: ReportOptions): Promise<string> {
-    const html = this.generateHtml(actions, opts);
+    const html = await this.generateHtml(actions, opts);
     if (opts?.outFile) {
       await mkdir(dirname(opts.outFile), { recursive: true });
       await writeFile(opts.outFile, html, "utf8");

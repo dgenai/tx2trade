@@ -26,6 +26,7 @@ export function buildEdgesAndIndex(
   // Step 1: containers
   const edges: TransferEdge[] = [];
   const accountIndex = buildAccountIndexSkeleton(tx, { debug: true });
+  
 
   log("Initialized account index", { size: accountIndex.size });
 

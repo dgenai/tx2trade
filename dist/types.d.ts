@@ -4,7 +4,7 @@
  */
 export type TradeAction = {
     transactionHash: string;
-    transactionType: "buy" | "sell";
+    transactionType: "buy" | "sell" | "transfer";
     walletAddress: string;
     transactionDate: Date;
     sold: {
@@ -36,6 +36,7 @@ export interface TransferEdge {
     destination: string;
     mint: string;
     amount: number;
+    decimals: number;
     authority?: string;
     programId?: string;
     depth?: number;

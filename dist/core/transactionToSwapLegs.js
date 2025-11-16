@@ -5,6 +5,8 @@ import { TokenToTokenStrategy } from "../strategies/TokenToTokenStrategy.js";
 import { WsolToTokenStrategy } from "../strategies/WsolToTokenStrategy.js";
 import { AuthorityOnlyStrategy } from "../strategies/AuthorityOnlyStrategy.js";
 import { TokenToWsolStrategy } from "../strategies/TokenToWsolStrategy.js";
+import { WalletToWalletTokenTransferStrategy } from "../strategies/WalletToWalletTokenTransferStrategy.js";
+import { ProxyVaultSwapStrategy } from "../strategies/ProxyVaultSwapStrategy.js";
 import { WSOL_DECIMALS, WSOL_MINT } from "../constants.js";
 import { pushUserSolDeltaEdge } from "../parsing/solDeltas.js";
 // Local fallback for WSOL mint (import from your types if available)
@@ -22,8 +24,6 @@ clusterWindowSeq = 120, // +- window to cluster WSOL outs around a token IN
  }) {
     const tags = new Map();
     const maxByMint = new Map();
-    const toLamports = (e) => e.mint === WSOL_MINT ? Math.round(e.amount * 1e9) : 0;
-    // Base: dust vs normal (by mint)
     for (const e of edges) {
         maxByMint.set(e.mint, Math.max(maxByMint.get(e.mint) ?? 0, e.amount));
     }
@@ -33,7 +33,6 @@ clusterWindowSeq = 120, // +- window to cluster WSOL outs around a token IN
         const isDustRel = maxMint > 0 && e.amount < maxMint * dustRelPct;
         tags.set(e.seq, isDustAbsWsol || isDustRel ? "dust" : "normal");
     }
-    // Pattern: repeated equal WSOL outs => fee
     const wsolUser = edges
         .filter(e => e.mint === WSOL_MINT && e.authority === userWallet)
         .sort((a, b) => a.seq - b.seq);
@@ -54,7 +53,6 @@ clusterWindowSeq = 120, // +- window to cluster WSOL outs around a token IN
                 tags.set(g.seq, "fee");
         }
     }
-    // Heuristic: non-checked small WSOL outs => tip/fee
     const wsolNonChecked = edges
         .filter((e) => e.mint === WSOL_MINT && e.authority === userWallet && e.checked === false)
         .sort((a, b) => a.seq - b.seq);
@@ -76,9 +74,8 @@ clusterWindowSeq = 120, // +- window to cluster WSOL outs around a token IN
             tags.set(e.seq, "fee"); // 0.002–0.01 SOL
         }
     }
-    // ⚡ NEW: cluster per token IN — keep single largest as core, reclass others as fee/tip
     const tokenIns = edges
-        .filter(e => e.mint !== WSOL_MINT && e.authority !== userWallet) // token credited to user (authority ≠ user)
+        .filter(e => e.mint !== WSOL_MINT && e.authority !== userWallet)
         .sort((a, b) => a.seq - b.seq);
     for (const inn of tokenIns) {
         const outs = edges.filter(e => e.mint === WSOL_MINT &&
@@ -86,25 +83,45 @@ clusterWindowSeq = 120, // +- window to cluster WSOL outs around a token IN
             Math.abs(e.seq - inn.seq) <= clusterWindowSeq);
         if (!outs.length)
             continue;
-        // Pick dominant (largest) as core
         let core = outs[0];
         for (const o of outs) {
             if (toLamports(o) > toLamports(core))
                 core = o;
         }
-        tags.set(core.seq, "normal"); // ensure core is normal
-        // Others => tip or fee
+        tags.set(core.seq, "normal");
         for (const o of outs) {
             if (o.seq === core.seq)
                 continue;
             const cur = tags.get(o.seq);
             if (cur === "fee" || cur === "tip")
-                continue; // keep previous strong classification
+                continue;
             const lam = toLamports(o);
             if (lam <= 2000000)
                 tags.set(o.seq, "tip");
             else
                 tags.set(o.seq, "fee");
+        }
+    }
+    for (const e of edges) {
+        if (e.mint === WSOL_MINT)
+            continue;
+        if (tags.get(e.seq) !== "normal")
+            continue;
+        const amount = e.amount;
+        if (!Number.isFinite(amount) || amount <= 0)
+            continue;
+        const maxMint = maxByMint.get(e.mint) ?? 0;
+        if (!(maxMint > 0))
+            continue;
+        const ratio = amount / maxMint;
+        if (ratio > 0.02)
+            continue;
+        const destReceivesMint = edges.filter(ed => ed.destination === e.destination && ed.mint === e.mint);
+        const destSendsMint = edges.filter(ed => ed.source === e.destination && ed.mint === e.mint);
+        const isSink = destReceivesMint.length === 1 && destSendsMint.length === 0;
+        const isUserPaying = e.authority === userWallet;
+        if (isSink && isUserPaying) {
+            tags.set(e.seq, "fee");
         }
     }
     return tags;
@@ -118,7 +135,6 @@ function attachFeesAndNetsToLegs({ tx, legs, edges, tags, userWallet, windowSeq 
         return s.startsWith("sol:delta") || d.startsWith("sol:delta") || e.synthetic === true;
     };
     const forceClass = (e, t) => {
-        // Heuristique fiable: un transfert System top-level est un tip Jito/priority
         const depth = e.depth ?? 0;
         if (depth === 0)
             return "tip";
@@ -205,7 +221,7 @@ export function transactionToSwapLegs_SOLBridge(tx, userWallet, opts) {
             console.debug("[txToLegs]", ...args);
     };
     // 1) Build edges from the transaction
-    const { edges } = buildEdgesAndIndex(tx, { debug });
+    const { edges, accountIndex } = buildEdgesAndIndex(tx, { debug });
     log("Edges built:", { count: edges.length });
     pushUserSolDeltaEdge(tx, edges, userWallet);
     if (!edges.length)
@@ -225,11 +241,13 @@ export function transactionToSwapLegs_SOLBridge(tx, userWallet, opts) {
     });
     // 4) Strategy pipeline (order = priority)
     const pipeline = [
-        new AggregatorHubStrategy(),
-        new TokenToTokenStrategy(),
-        new WsolToTokenStrategy(),
-        new TokenToWsolStrategy(),
-        new AuthorityOnlyStrategy(),
+        new AggregatorHubStrategy(), // 1 : match AMM Jupiter / pump
+        new ProxyVaultSwapStrategy(), // 2 : match vault authority swap
+        new TokenToTokenStrategy(), // 3 : simple token-to-token
+        new WsolToTokenStrategy(), // 4 : WSOL → Token
+        new TokenToWsolStrategy(), // 5 : Token → WSOL
+        new WalletToWalletTokenTransferStrategy(), // 6 : transfer direct
+        new AuthorityOnlyStrategy(), // 7 : fallback
     ];
     const commonOpts = {
         windowOutToSolIn,

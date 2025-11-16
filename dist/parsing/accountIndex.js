@@ -69,12 +69,11 @@ function addFromTokenInitsAndAtaCreates(tx, userWallet, out, opts) {
         }
         // spl-associated-token-account create / createIdempotent
         if (pid === ATA_PROGRAM_ID && (p.type === "create" || p.type === "createIdempotent")) {
+            console.log(p.info?.account);
             const acc = p.info?.account;
             const wallet = p.info?.wallet;
-            if (acc && wallet === userWallet) {
-                out.add(acc);
-                log("Added ATA account", { acc });
-            }
+            out.add(acc);
+            log("Added ATA account", { acc });
         }
     };
     // Outer instructions

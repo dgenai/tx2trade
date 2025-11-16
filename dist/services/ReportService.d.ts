@@ -31,7 +31,7 @@ export declare class ReportService {
     private fmtAmt;
     /** Affiche uniquement nom/symbole + bouton copier (copie le mint si dispo, sinon le symbole). */
     private tokenCell;
-    generateHtml(_actions: TradeAction[], opts?: ReportOptions): string;
+    generateHtml(_actions: TradeAction[], opts?: ReportOptions): Promise<string>;
     writeHtml(actions: TradeAction[], opts?: ReportOptions): Promise<string>;
 }
 //# sourceMappingURL=ReportService.d.ts.map

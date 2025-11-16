@@ -74,11 +74,11 @@ export async function tx2trade(sigs, rpcEndpoint, opts = {}) {
         const startTimeMs = Math.floor(minBlockTime / 60) * 60 * 1000;
         const endTimeMs = (Math.floor(maxBlockTime / 60) + 1) * 60 * 1000;
         const svc = new BinanceKlinesService({ market: "spot" });
-        // 1. Construire les fenêtres de 1000 minutes max
+        // 1. Build 1500 interval windows
         const windows = buildWindows(startTimeMs, endTimeMs, 60000, 1000);
         if (debug)
             console.log(`📊 ${windows.length} fenêtre(s) à récupérer en parallèle`);
-        // 2. Préparer les tâches
+        // 2. setup tasks
         const tasks = windows.map(w => async () => {
             if (debug) {
                 console.log(`⏳ Fetching window ${new Date(w.startMs).toISOString()} → ${new Date(w.endMs).toISOString()}`);
@@ -92,9 +92,9 @@ export async function tx2trade(sigs, rpcEndpoint, opts = {}) {
             });
             return batch;
         });
-        // 3. Lancer avec concurrence limitée
+        // 3. run with concurrency
         const results = await runWithLimit(tasks, 5);
-        // 4. Fusionner + trier
+        // 4. join and sort
         candles = results.flat().sort((a, b) => a.openTime - b.openTime);
         if (debug)
             console.log(`📈 Binance returned ${candles.length} candles (1m).`);

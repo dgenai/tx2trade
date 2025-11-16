@@ -84,12 +84,12 @@ function addFromTokenInitsAndAtaCreates(
 
     // spl-associated-token-account create / createIdempotent
     if (pid === ATA_PROGRAM_ID && (p.type === "create" || p.type === "createIdempotent")) {
+      console.log(p.info?.account);
       const acc = p.info?.account;
       const wallet = p.info?.wallet;
-      if (acc && wallet === userWallet) {
         out.add(acc);
         log("Added ATA account", { acc });
-      }
+      
     }
   };
 
@@ -130,6 +130,7 @@ export function extractUserTokenAccounts(
     }
   };
 
+
   // Step 1: Accounts present in pre/post balances
   addFromTB(tx?.meta?.preTokenBalances);
   addFromTB(tx?.meta?.postTokenBalances);
@@ -137,6 +138,8 @@ export function extractUserTokenAccounts(
   // Step 2: Accounts created/initialized in this transaction
   addFromTokenInitsAndAtaCreates(tx, userWallet, s, { debug });
 
+  
+  
   log("Final user token accounts", { count: s.size });
   return s;
 }

@@ -9,7 +9,7 @@
  */
 export type TradeAction = {
   transactionHash: string;
-  transactionType: "buy" | "sell";
+  transactionType: "buy" | "sell" | "transfer";
   walletAddress: string;
   transactionDate: Date;
 
@@ -44,7 +44,7 @@ export interface TransferEdge {
   destination: string; // Receiver address
   mint: string;        // Token mint (WSOL for native SOL)
   amount: number;      // Amount in UI units (not lamports)
-
+  decimals: number;
   authority?: string;  // Authority of the transfer (if available)
   programId?: string;  // Program responsible for the transfer
   depth?: number;      // Call depth (0 = top-level, 1 = inner)

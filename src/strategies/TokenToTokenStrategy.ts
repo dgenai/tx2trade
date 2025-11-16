@@ -31,10 +31,14 @@ export class TokenToTokenStrategy implements LegStrategy {
 
     dbg("Starting match with", edges.length, "edges");
 
+    
     const netByMint = new Map<string, bigint>();
 
     for (const e of edges) {
-      if (!userTokenAccounts.has(e.source) && !userTokenAccounts.has(e.destination)) continue;
+      if (!userTokenAccounts.has(e.source) && !userTokenAccounts.has(e.destination)) {
+        continue
+      
+      };
 
       if (e.mint === WSOL_MINT) {
         dbg("Skipping WSOL edge", { seq: e.seq, mint: e.mint, amount: e.amount });

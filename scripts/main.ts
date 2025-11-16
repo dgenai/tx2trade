@@ -146,7 +146,7 @@ Options:
 `);
 }
 
-const debug = true;
+const debug = false;
 
 /**
  * Main execution flow.
@@ -216,15 +216,17 @@ async function main() {
   // 1) Fetch transactions in batch
   // -------------------------------
   const fetched: Array<{ sig: string; tx: any | null }> = [];
-  const CHUNK = 50; // limit per batch to avoid RPC overload
+  const CHUNK = 10; // limit per batch to avoid RPC overload
 
   for (let i = 0; i < sigs.length; i += CHUNK) {
     const chunk = sigs.slice(i, i + CHUNK);
     const txs = await rpc.getTransactionsParsedBatch(chunk, 0);
+
     for (let j = 0; j < chunk.length; j++) {
       fetched.push({ sig: chunk[j], tx: txs[j] ?? null });
     }
   }
+
 
   // -------------------------------
   // 2) Retrieve SOL/USDT candles
@@ -329,7 +331,6 @@ async function main() {
   console.timeEnd("⏱ Total parsing");
   if (debug) {
     console.log("\n🧬 Actions + metadata:");
-    console.log(JSON.stringify(enriched, null, 2));
     console.log("Total RPC requests:", rpc.getRequestsCount());
     console.log(`Total trades: ${enriched.length}`);
     console.log(`Total transactions: ${fetched.length}`);

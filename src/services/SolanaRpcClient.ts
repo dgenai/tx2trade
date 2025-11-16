@@ -80,10 +80,12 @@ export class SolanaRpcClient {
 
         const res = await fetch(this.endpoint, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json" },
+
           body: JSON.stringify(body),
           signal: controller.signal,
         });
+
 
         clearTimeout(t);
 
@@ -101,8 +103,10 @@ export class SolanaRpcClient {
         return json;
       } catch (err) {
         lastErr = err;
-        this.dbg("Error on attempt", attempt + 1, err);
+      
+        const message = err instanceof Error ? err.message : String(err);
 
+        this.dbg("Error on attempt", attempt + 1, message);
         if (attempt === this.maxRetries) break;
 
         const ms = this.retryBackoffMs * Math.pow(2, attempt);

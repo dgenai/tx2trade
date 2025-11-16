@@ -19,8 +19,10 @@ export class TokenToTokenStrategy {
         dbg("Starting match with", edges.length, "edges");
         const netByMint = new Map();
         for (const e of edges) {
-            if (!userTokenAccounts.has(e.source) && !userTokenAccounts.has(e.destination))
+            if (!userTokenAccounts.has(e.source) && !userTokenAccounts.has(e.destination)) {
                 continue;
+            }
+            ;
             if (e.mint === WSOL_MINT) {
                 dbg("Skipping WSOL edge", { seq: e.seq, mint: e.mint, amount: e.amount });
                 continue;

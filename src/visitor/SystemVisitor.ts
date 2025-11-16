@@ -59,6 +59,7 @@ export class SystemVisitor implements InstructionVisitor {
         authority: source,
         programId: ix?.programId,
         depth: ctx.depth,
+        decimals: 9
       });
 
       if (ctx.debug) {
