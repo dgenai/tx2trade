@@ -16,6 +16,6 @@ type Options = {
  * - no short-circuit (do not return on first match)
  * - consume used edges so subsequent strategies don’t reuse them
  */
-export declare function transactionToSwapLegs_SOLBridge(tx: any, userWallet: string, opts?: Options): SwapLeg[];
+export declare function transactionToSwapLegs_SOLBridge(sig: string, tx: any, userWallet: string, opts: Options): SwapLeg[];
 export {};
 //# sourceMappingURL=transactionToSwapLegs.d.ts.map

@@ -5,7 +5,7 @@ export class AggregatorHubStrategy {
         this.name = "AggregatorHub";
     }
     match(edges, userTokenAccounts, userWallet, opts) {
-        const { windowOutToSolIn = 120, windowHubToUserIn = 120, windowTotalFromOut = 400, debug = opts.debug | false, log = (..._args) => { }, tags, } = opts ?? {};
+        const { windowOutToSolIn = 120, windowHubToUserIn = 120, windowTotalFromOut = 400, debug = opts.debug || false, log = (..._args) => { }, tags, } = opts ?? {};
         const dbg = (...args) => {
             if (debug)
                 log("[AggregatorHub]", ...args);

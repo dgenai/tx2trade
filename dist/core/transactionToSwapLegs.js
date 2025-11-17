@@ -215,7 +215,7 @@ function attachFeesAndNetsToLegs({ tx, legs, edges, tags, userWallet, windowSeq 
  * - consume used edges so subsequent strategies don’t reuse them
  */
 export function transactionToSwapLegs_SOLBridge(sig, tx, userWallet, opts) {
-    const { debug = opts.debug | false, windowOutToSolIn, windowHubToUserIn, windowTotalFromOut, requireAuthorityUserForOut, minWsolLamports = 100000, dustRelPct = 0.005, maxPasses = 6, windowAroundIn = 200 } = opts ?? {};
+    const { debug = opts.debug || false, windowOutToSolIn, windowHubToUserIn, windowTotalFromOut, requireAuthorityUserForOut, minWsolLamports = 100000, dustRelPct = 0.005, maxPasses = 6, windowAroundIn = 200 } = opts ?? {};
     const log = (...args) => {
         if (debug)
             console.debug("[txToLegs]", ...args);
@@ -306,7 +306,7 @@ export function transactionToSwapLegs_SOLBridge(sig, tx, userWallet, opts) {
             // then run another pass if there is still work to do.
         }
     }
-    log(`Done after ${pass} pass(es). Legs total: ${allLegs.length}`);
+    console.log(`Done after ${pass} pass(es). Legs total: ${allLegs.length}`);
     attachFeesAndNetsToLegs({
         tx,
         legs: allLegs,
@@ -314,6 +314,9 @@ export function transactionToSwapLegs_SOLBridge(sig, tx, userWallet, opts) {
         tags,
         userWallet,
     });
+    if (allLegs.length === 0) {
+        console.log(`❌ No swap legs detected for this transaction: ${sig}`);
+    }
     return allLegs;
 }
 //# sourceMappingURL=transactionToSwapLegs.js.map

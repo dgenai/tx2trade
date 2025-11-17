@@ -26,7 +26,7 @@ export function buildAccountIndexSkeleton(tx, opts) {
                 decimals: e.uiTokenAmount?.decimals,
                 owner: e.owner,
             });
-            log("Indexed account from token balance", { addr, mint: e.mint, owner: e.owner });
+            // log("Indexed account from token balance", { addr, mint: e.mint, owner: e.owner });
         }
     }
     // Step 2 & 3: Enrich from pre/post token balances

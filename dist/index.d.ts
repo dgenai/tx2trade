@@ -1,18 +1,32 @@
+export { SolanaRpcClient } from "./services/SolanaRpcClient.js";
 /**
- * Options for customizing transaction-to-trade parsing.
+ * Unified input format for tx2trade(), compatible with both CLI modes:
+ *  - Direct signature list
+ *  - Address mode with pagination + strict count validation
  */
-type Tx2TradeOpts = {
+export type Tx2TradeInput = {
+    sigs?: string[];
+    address?: string;
+    total?: number;
+    pageSize?: number;
+    before?: string;
+    until?: string;
+    rpcEndpoint: string;
     debug?: boolean;
     windowTotalFromOut?: number;
     requireAuthorityUserForOut?: boolean;
 };
-export { SolanaRpcClient } from "./services/SolanaRpcClient.js";
 /**
- * Convert a list of Solana transaction signatures into enriched trade actions.
- * Now:
- *  1) Fetch ALL transactions in batches
- *  2) Parse AFTER everything is fetched
- *  3) Enrich with Metaplex metadata
+ * tx2trade()
+ * ==========
+ * Main pipeline used by the CLI:
+ *  - Signature-mode or address-mode
+ *  - Full transaction fetch with strict validation
+ *  - Skip failed tx (meta.err)
+ *  - Klines enrichment identical to CLI
+ *  - Legs → Actions → Metadata enrichment
+ *
+ * Output: Array of enriched trade actions
  */
-export declare function tx2trade(sigs: string[], rpcEndpoint: string, opts?: Tx2TradeOpts): Promise<any[]>;
+export declare function tx2trade(input: Tx2TradeInput): Promise<any[]>;
 //# sourceMappingURL=index.d.ts.map

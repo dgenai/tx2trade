@@ -13,7 +13,7 @@ export class TokenToTokenStrategy {
         this.name = "TokenToTokenStrategy";
     }
     match(edges, userTokenAccounts, userWallet, opts) {
-        const {  debug = opts.debug || false, log = (..._args) => { }, } = opts ?? {};
+        const { debug = opts.debug || false, log = (..._args) => { }, } = opts ?? {};
         const dbg = (...args) => { if (debug)
             log(`[${this.name}]`, ...args); };
         dbg("Starting match with", edges.length, "edges");

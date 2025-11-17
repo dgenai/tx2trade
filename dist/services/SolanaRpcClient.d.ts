@@ -48,5 +48,6 @@ export declare class SolanaRpcClient {
         until?: string;
         commitment?: Commitment;
     }): Promise<string[]>;
+    private hasTransfer;
 }
 //# sourceMappingURL=SolanaRpcClient.d.ts.map

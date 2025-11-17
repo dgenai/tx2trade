@@ -12,7 +12,7 @@ export class SolanaRpcClient {
         this.endpoint = opts.endpoint;
         this.timeoutMs = opts.timeoutMs ?? 30000;
         this.maxRetries = opts.maxRetries ?? 3;
-        this.retryBackoffMs = opts.retryBackoffMs ?? 300;
+        this.retryBackoffMs = opts.retryBackoffMs ?? 3000;
         this.defaultCommitment = opts.defaultCommitment ?? "confirmed";
         // cohérent avec ton premier fichier
         this.debug = opts.debug ?? true;
@@ -30,11 +30,12 @@ export class SolanaRpcClient {
         while (attempt <= this.maxRetries) {
             try {
                 this.requestCount++;
-                this.dbg("POST attempt", attempt + 1, "of", this.maxRetries + 1, { body });
+                this.dbg("POST attempt", attempt + 1, "of", this.maxRetries + 1);
                 const controller = new AbortController();
                 const t = setTimeout(() => controller.abort(), this.timeoutMs);
                 const res = await fetch(this.endpoint, {
                     method: "POST",
+                    // headers: { "Content-Type": "application/json", "X-API-Key": "sk_test_1fd5527bf3b1433aa827294632a18b9e" },
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify(body),
                     signal: controller.signal,
@@ -49,7 +50,6 @@ export class SolanaRpcClient {
                     throw new Error(`HTTP ${res.status}: ${text}`);
                 }
                 const json = await res.json();
-                this.dbg("Response received", { json });
                 return json;
             }
             catch (err) {
@@ -97,7 +97,12 @@ export class SolanaRpcClient {
         }
         const final = signatures.map((_, i) => byId.get(i) ?? null);
         this.dbg("Batch result assembled", { found: final.filter(Boolean).length });
-        return final;
+        const filtered = final.map(tx => {
+            if (!tx)
+                return null;
+            return this.hasTransfer(tx) ? tx : null;
+        });
+        return filtered;
     }
     async getAccountsBase64(addresses, chunkSize = 100) {
         this.dbg("Fetching accounts (base64)", { total: addresses.length, chunkSize });
@@ -200,6 +205,50 @@ export class SolanaRpcClient {
             this.dbg(`↪️  Pagination: collected ${sigs.length}/${totalTarget} (next before=${before})`);
         }
         return sigs;
+    }
+    hasTransfer(tx) {
+        if (!tx)
+            return false;
+        const msg = tx.transaction?.message;
+        const meta = tx.meta;
+        if (!msg)
+            return false;
+        // 1) Legacy or v0 → instructions always here
+        const instrs = msg.instructions ?? [];
+        // 2) inner instructions inside meta
+        const inner = meta?.innerInstructions ?? [];
+        // Extract types from parsed instructions
+        const getType = (ix) => {
+            const p = ix.parsed;
+            if (!p)
+                return undefined;
+            // Standard SPL-TOKEN format
+            if (p.type === "transfer" || p.type === "transferChecked") {
+                return p.type;
+            }
+            // Sometimes the RPC returns { "parsed": { "info": {...}, "type": "<...>" } }
+            if (typeof p.type === "string")
+                return p.type;
+            // Some providers wrap type inside parsed.info.type
+            if (p.info?.type)
+                return p.info.type;
+            return undefined;
+        };
+        // Scan message.instructions
+        for (const ix of instrs) {
+            const t = getType(ix);
+            if (t === "transfer" || t === "transferChecked")
+                return true;
+        }
+        // Scan inner instructions
+        for (const group of inner) {
+            for (const ix of group.instructions ?? []) {
+                const t = getType(ix);
+                if (t === "transfer" || t === "transferChecked")
+                    return true;
+            }
+        }
+        return false;
     }
 }
 //# sourceMappingURL=SolanaRpcClient.js.map

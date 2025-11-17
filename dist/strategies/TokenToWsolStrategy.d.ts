@@ -33,7 +33,7 @@ type MatchOpts = {
 };
 export declare class TokenToWsolStrategy implements LegStrategy {
     name: string;
-    match(edges: TransferEdge[], userTokenAccounts: Set<string>, userWallet: string, opts?: MatchOpts): SwapLeg[];
+    match(edges: TransferEdge[], userTokenAccounts: Set<string>, userWallet: string, opts: MatchOpts): SwapLeg[];
 }
 export {};
 //# sourceMappingURL=TokenToWsolStrategy.d.ts.map

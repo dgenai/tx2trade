@@ -24,8 +24,7 @@ export function inferUserWallet(tx) {
         return "";
     })
         .filter(Boolean);
-
-        // Exclude system accounts and known program addresses
+    // Exclude system accounts and known program addresses
     const blacklist = new Set([
         "11111111111111111111111111111111", // System Program
         "ComputeBudget111111111111111111111111111111", // Compute Budget Program
@@ -37,7 +36,6 @@ export function inferUserWallet(tx) {
         "SysvarEpochSchedu1e11111111111111111111111", // Epoch Schedule sysvar
     ]);
     const humanSigners = signers.filter((s) => !blacklist.has(s));
-
     // Case 1: only one "human" signer -> that's the user
     if (humanSigners.length === 1) {
         return humanSigners[0];
@@ -51,10 +49,8 @@ export function inferUserWallet(tx) {
     };
     addOwner(tx?.meta?.preTokenBalances);
     addOwner(tx?.meta?.postTokenBalances);
-    console.debug("📦 Owners found in token balances:", [...owners]);
     const matchByOwner = humanSigners.find((s) => owners.has(s));
     if (matchByOwner) {
-        console.debug("✅ User wallet matched by token owner:", matchByOwner);
         return matchByOwner;
     }
     // Case 3: try to match signer with authorities in instructions
@@ -70,15 +66,12 @@ export function inferUserWallet(tx) {
         for (const ix of inner?.instructions ?? [])
             collect(ix);
     }
-    console.debug("🛠 Authorities extracted from instructions:", [...authorities]);
     const matchByAuth = humanSigners.find((s) => authorities.has(s));
     if (matchByAuth) {
-        console.debug("✅ User wallet matched by instruction authority:", matchByAuth);
         return matchByAuth;
     }
     // Fallback: return first human signer, or first signer in general
     const fallback = humanSigners[0] ?? signers[0] ?? "";
-    console.debug("⚠️ Falling back to first signer:", fallback);
     return fallback;
 }
 //# sourceMappingURL=inferUserWallet.js.map

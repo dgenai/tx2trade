@@ -15,6 +15,7 @@ export type TradeAction = {
         uri?: string;
         unitPriceUsd: string;
         amountUsd: string;
+        targetWallet?: string;
     };
     bought: {
         address?: string;
@@ -51,6 +52,7 @@ export interface SwapLeg {
     boughtMint: string;
     boughtAmount: number;
     path: TransferEdge[];
+    targetWallet?: string;
     soldCore?: number;
     routerFees?: number;
     tip?: number;

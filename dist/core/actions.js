@@ -87,11 +87,12 @@ export function legsToTradeActions(legs, ctx) {
                     amountUsd: "0",
                 },
                 bought: {
+                    ...(leg.targetWallet && { targetWallet: leg.targetWallet }),
                     unitPriceUsd: "0",
                     amountUsd: "0",
                 },
             });
-            continue; // avoid falling into swap logic
+            continue;
         }
         // -------------------------------------------------------------------------
         // BUY (SOL → token)
