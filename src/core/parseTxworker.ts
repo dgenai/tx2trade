@@ -7,7 +7,7 @@ type Job = { id: number; tx: any; userWallet: string; debug?: boolean };
 
 parentPort.on("message", (job: Job) => {
   try {
-    const legs = transactionToSwapLegs_SOLBridge(job.tx, job.userWallet, {
+    const legs = transactionToSwapLegs_SOLBridge("",job.tx, job.userWallet, {
       windowTotalFromOut: 500,
       requireAuthorityUserForOut: true,
       debug: job.debug,

@@ -99,28 +99,30 @@ export function legsToTradeActions(
     // - soldAmount: amount
     // - boughtMint: "" (intentionally empty)
     // - boughtAmount: 0
-    if (boughtAmt === 0 && !leg.boughtMint && soldAmt > 0) {
-      actions.push({
-        transactionDate: txDate,
-        transactionHash: ctx.txHash,
-        transactionType: "transfer",
-        walletAddress: ctx.wallet,
+   if (boughtAmt === 0 && !leg.boughtMint && soldAmt > 0) {
+  actions.push({
+    transactionDate: txDate,
+    transactionHash: ctx.txHash,
+    transactionType: "transfer",
+    walletAddress: ctx.wallet,
 
-        sold: {
-          address: leg.soldMint,
-          amount: soldAmt,
-          unitPriceUsd: "0",
-          amountUsd: "0",
-        },
+    sold: {
+      address: leg.soldMint,
+      amount: soldAmt,
+      unitPriceUsd: "0",
+      amountUsd: "0",
+    },
 
-        bought: {
-          unitPriceUsd: "0",
-          amountUsd: "0",
-        },
-      });
+    bought: {
+      ...(leg.targetWallet && { targetWallet: leg.targetWallet }),
+      unitPriceUsd: "0",
+      amountUsd: "0",
+    },
+  });
 
-      continue; // avoid falling into swap logic
-    }
+  continue;
+}
+
 
     // -------------------------------------------------------------------------
     // BUY (SOL → token)

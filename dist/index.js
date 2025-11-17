@@ -110,7 +110,7 @@ export async function tx2trade(sigs, rpcEndpoint, opts = {}) {
             // Infer the user wallet involved
             const userWallet = inferUserWallet(tx);
             // Convert transaction into swap legs
-            const legs = transactionToSwapLegs_SOLBridge(tx, userWallet, {
+            const legs = transactionToSwapLegs_SOLBridge(sig, tx, userWallet, {
                 windowTotalFromOut,
                 requireAuthorityUserForOut,
                 debug,

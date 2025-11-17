@@ -4,7 +4,7 @@ export class AuthorityOnlyStrategy {
         this.name = "AuthorityOnly";
     }
     match(edges, userTokenAccounts, userWallet, opts) {
-        const { windowTotalFromOut = 400, debug = true, log = () => { } } = opts ?? {};
+        const { windowTotalFromOut = 400, debug = opts.debug || false, log = () => { } } = opts ?? {};
         const dbg = (...a) => { if (debug)
             log("[AuthorityOnly]", ...a); };
         const userSolOuts = edges.filter((e) => e.mint === WSOL_MINT && e.authority === userWallet);

@@ -21,6 +21,7 @@ export type TradeAction = {
     uri?: string;
     unitPriceUsd: string;
     amountUsd: string;
+    targetWallet?: string;
   };
 
   bought: {
@@ -61,6 +62,7 @@ export interface SwapLeg {
   boughtMint: string;
   boughtAmount: number;
   path: TransferEdge[];
+  targetWallet?: string,
 
   // Decomposed SOL flows (in SOL units)
   soldCore?: number;       // Core SOL outflow (bonding curve only)

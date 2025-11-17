@@ -288,12 +288,13 @@ function attachFeesAndNetsToLegs({
  * - consume used edges so subsequent strategies don’t reuse them
  */
 export function transactionToSwapLegs_SOLBridge(
+  sig: string,
   tx: any,
   userWallet: string,
-  opts?: Options
+  opts: Options
 ): SwapLeg[] {
   const {
-    debug = true,
+    debug = opts.debug || false,
     windowOutToSolIn,
     windowHubToUserIn,
     windowTotalFromOut,
@@ -422,7 +423,7 @@ export function transactionToSwapLegs_SOLBridge(
     }
   }
 
-  log(`Done after ${pass} pass(es). Legs total: ${allLegs.length}`);
+  console.log(`Done after ${pass} pass(es). Legs total: ${allLegs.length}`);
 
   attachFeesAndNetsToLegs({
     tx,
@@ -431,6 +432,11 @@ export function transactionToSwapLegs_SOLBridge(
     tags,
     userWallet,
   });
+
+    if (allLegs.length === 0) {
+      console.log(`❌ No swap legs detected for this transaction: ${sig}`);
+
+  }
 
   return allLegs;
 }

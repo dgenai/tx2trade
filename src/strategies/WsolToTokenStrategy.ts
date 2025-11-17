@@ -8,7 +8,7 @@ export class WsolToTokenStrategy implements LegStrategy {
     edges: TransferEdge[],
     userTokenAccounts: Set<string>,
     userWallet: string,
-    opts?: {
+    opts: {
       windowTotalFromOut?: number;  // max seq gap (before IN)
       windowSolAfterIn?: number;    // max seq gap (after IN)
       windowAroundIn?: number;      // NEW: symmetric window around IN
@@ -22,7 +22,7 @@ export class WsolToTokenStrategy implements LegStrategy {
       windowTotalFromOut = 400,
       windowSolAfterIn = 50,
       windowAroundIn, // if defined, overrides before/after with |seq(out)-seq(in)| <= windowAroundIn
-      debug = true,
+      debug = opts.debug || false,
       log = () => {},
       tags,
       minLamportsToSum = 50_000,

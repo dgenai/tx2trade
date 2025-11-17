@@ -25,7 +25,7 @@ export class TokenToWsolStrategy {
     }
     match(edges, userTokenAccounts, userWallet, opts) {
         const { windowTotalFromOut = 400, windowAroundIn = 200, // <-- NEW
-        debug = true, log = () => { }, tags, aggregateOuts = false, } = (opts ?? {});
+        debug = opts.debug | false, log = () => { }, tags, aggregateOuts = false, } = (opts ?? {});
         const dbg = (...a) => { if (debug)
             log(`[${this.name}]`, ...a); };
         // OUTs: user-signed debits of non-WSOL tokens from user-owned token accounts (exclude explicit fees)

@@ -59,7 +59,7 @@ export class TokenVisitor implements InstructionVisitor {
         destination,
         mint,
         amount,
-        authority: info.authority,
+        authority: info.authority ?? info.multisigAuthority ?? info.delegate ?? (info.signers?.length ? info.signers[0] : undefined),
         programId: ix?.programId,
         depth: ctx.depth,
         decimals

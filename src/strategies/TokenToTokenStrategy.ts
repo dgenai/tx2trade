@@ -20,10 +20,10 @@ export class TokenToTokenStrategy implements LegStrategy {
     edges: TransferEdge[],
     userTokenAccounts: Set<string>,
     userWallet: string,
-    opts?: { debug?: boolean; log?: (...args: any[]) => void }
+    opts: { debug?: boolean; log?: (...args: any[]) => void }
   ): SwapLeg[] {
     const {
-      debug = true,
+      debug = opts.debug || false,
       log = (..._args: any[]) => {},
     } = opts ?? {};
 

@@ -5,7 +5,7 @@ export class WsolToTokenStrategy {
     }
     match(edges, userTokenAccounts, userWallet, opts) {
         const { windowTotalFromOut = 400, windowSolAfterIn = 50, windowAroundIn, // if defined, overrides before/after with |seq(out)-seq(in)| <= windowAroundIn
-        debug = true, log = () => { }, tags, minLamportsToSum = 50000, } = opts ?? {};
+        debug = opts.debug | false, log = () => { }, tags, minLamportsToSum = 50000, } = opts ?? {};
         // Internal debug logger
         const dbg = (...a) => { if (debug)
             log(`[${this.name}]`, ...a); };

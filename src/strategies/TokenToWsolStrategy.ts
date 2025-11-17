@@ -44,12 +44,12 @@ export class TokenToWsolStrategy implements LegStrategy {
     edges: TransferEdge[],
     userTokenAccounts: Set<string>,
     userWallet: string,
-    opts?: MatchOpts
+    opts: MatchOpts
   ): SwapLeg[] {
     const {
       windowTotalFromOut = 400,
       windowAroundIn = 200,              // <-- NEW
-      debug = true,
+      debug = opts.debug || false,
       log = () => {},
       tags,
       aggregateOuts = false,

@@ -24,8 +24,8 @@ export function inferUserWallet(tx) {
         return "";
     })
         .filter(Boolean);
-    console.debug("🔑 Extracted signers:", signers);
-    // Exclude system accounts and known program addresses
+
+        // Exclude system accounts and known program addresses
     const blacklist = new Set([
         "11111111111111111111111111111111", // System Program
         "ComputeBudget111111111111111111111111111111", // Compute Budget Program
@@ -37,10 +37,9 @@ export function inferUserWallet(tx) {
         "SysvarEpochSchedu1e11111111111111111111111", // Epoch Schedule sysvar
     ]);
     const humanSigners = signers.filter((s) => !blacklist.has(s));
-    console.debug("🧑 Human signers (after blacklist):", humanSigners);
+
     // Case 1: only one "human" signer -> that's the user
     if (humanSigners.length === 1) {
-        console.debug("✅ Unique human signer identified as user:", humanSigners[0]);
         return humanSigners[0];
     }
     // Case 2: try to match signer with token account owners

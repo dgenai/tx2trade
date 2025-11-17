@@ -1,112 +1,67 @@
 #!/usr/bin/env ts-node
 
-/**
- * CLI Tool: Parse Solana transactions into structured trade actions,
- * enriched with token metadata and market data.
- *
- * Features:
- *  - Direct signature parsing (from arguments or --sigs).
- *  - Address mode with pagination (>1000 signatures supported).
- *  - Batch fetching of transactions, parsed after retrieval.
- *  - Optional HTML report generation.
- *  - Binance SOL/USDT 1m candles enrichment for blockTime ranges.
- *
- * Example:
- *   ts-node src/app/main.ts --address <PUBKEY> --total 3000 --pageSize 1000
- */
-import { fileURLToPath } from "node:url";
-import { dirname, resolve } from "node:path";
-
-
 import clipboardy from "clipboardy";
 import dotenv from "dotenv";
 dotenv.config();
 
-import { SolanaRpcClient, Commitment } from "../src/services/SolanaRpcClient.js";
-import { MetaplexMetadataService } from "../src/services/MetaplexMetadataService.js";
-
-import { transactionToSwapLegs_SOLBridge } from "../src/core/transactionToSwapLegs.js";
-import { legsToTradeActions } from "../src/core/actions.js";
-import { inferUserWallet } from "../src/core/inferUserWallet.js";
-
+import { Commitment } from "../src/services/SolanaRpcClient.js";
 import { ReportService } from "../src/services/ReportService.js";
-import { BinanceKlinesService } from "../src/services/BinanceKlinesService.js";
-import pLimit from "p-limit";
+import { tx2trade, Tx2TradeInput } from "../src/index.js";
 
-function buildWindows(startTimeMs: number, endTimeMs: number, intervalMs = 60_000, maxCandles = 1000) {
-  const maxSpan = intervalMs * maxCandles;
-  const windows: { startMs: number; endMs: number }[] = [];
-  let curStart = startTimeMs;
-  while (curStart < endTimeMs) {
-    const curEnd = Math.min(curStart + maxSpan - 1, endTimeMs);
-    windows.push({ startMs: curStart, endMs: curEnd });
-    curStart = curEnd + 1;
-  }
-  return windows;
-}
-
-// limiteur de concurrence simple
-async function runWithLimit<T>(tasks: (() => Promise<T>)[], concurrency = 20): Promise<T[]> {
-  const results: T[] = [];
-  let index = 0;
-  async function worker() {
-    while (index < tasks.length) {
-      const i = index++;
-      results[i] = await tasks[i]();
-    }
-  }
-  const workers = Array.from({ length: concurrency }, () => worker());
-  await Promise.all(workers);
-  return results;
-}
-
-// ---------- CLI Flags definition ----------
+// ----------------------------------------------------------------------------
+// CLI FLAGS
+// ----------------------------------------------------------------------------
 type CliFlags = {
-  sigs?: string[];              // Transaction signatures
-  address?: string;             // Address to fetch signatures from
-  limit?: number;               // Legacy single-page limit (prefer --total)
-  total?: number;               // Total number of signatures to fetch
-  pageSize?: number;            // RPC page size (max 1000)
-  before?: string;              // Fetch signatures before this one
-  until?: string;               // Fetch signatures until this one
-  commitment?: Commitment;      // Solana commitment level
-  help?: boolean;               // Show help
-  report?: boolean | string;    // Generate HTML report (true or output path)
-  out?: string;                 // Explicit output path (overrides report)
+  sigs?: string[];
+  address?: string;
+  limit?: number;
+  total?: number;
+  pageSize?: number;
+  before?: string;
+  until?: string;
+  commitment?: Commitment;
+
+  help?: boolean;
+  report?: boolean | string;
+  out?: string;
 };
 
-/**
- * Minimal flag parser.
- * Supports both long/short aliases and positional args.
- */
 function parseArgs(argv: string[]): { flags: CliFlags; positionals: string[] } {
   const flags: CliFlags = {};
   const positionals: string[] = [];
+
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
+
     if (a === "--help" || a === "-h") flags.help = true;
     else if (a === "--sigs" || a === "-s") {
       const v = argv[++i];
       if (v) flags.sigs = v.split(",").map(s => s.trim()).filter(Boolean);
     } else if (a === "--address" || a === "-a") flags.address = argv[++i];
-    else if (a === "--limit" || a === "-l") { const v = Number(argv[++i]); if (!Number.isNaN(v)) flags.limit = v; }
-    else if (a === "--total") { const v = Number(argv[++i]); if (!Number.isNaN(v)) flags.total = v; }
-    else if (a === "--pageSize") { const v = Number(argv[++i]); if (!Number.isNaN(v)) flags.pageSize = v; }
-    else if (a === "--before") flags.before = argv[++i];
+    else if (a === "--limit" || a === "-l") {
+      const v = Number(argv[++i]);
+      if (!Number.isNaN(v)) flags.limit = v;
+    } else if (a === "--total") {
+      const v = Number(argv[++i]);
+      if (!Number.isNaN(v)) flags.total = v;
+    } else if (a === "--pageSize") {
+      const v = Number(argv[++i]);
+      if (!Number.isNaN(v)) flags.pageSize = v;
+    } else if (a === "--before") flags.before = argv[++i];
     else if (a === "--until") flags.until = argv[++i];
     else if (a === "--commitment" || a === "-c") {
       const v = argv[++i] as Commitment;
-      if (v === "processed" || v === "confirmed" || v === "finalized") flags.commitment = v;
-      else console.warn(`⚠️ Unknown commitment "${v}", ignoring.`);
+      if (v === "processed" || v === "confirmed" || v === "finalized") {
+        flags.commitment = v;
+      } else {
+        console.warn(`⚠️ Unknown commitment "${v}", ignoring.`);
+      }
     } else if (a === "--report") {
-      // Support both `--report` (bool) and `--report <file>`
       const peek = argv[i + 1];
       if (peek && !peek.startsWith("-")) {
         flags.report = peek;
         i++;
-      } else {
-        flags.report = true;
-      }
+      } else flags.report = true;
     } else if (a === "--out") {
       flags.out = argv[++i];
     } else if (a.startsWith("-")) {
@@ -115,47 +70,35 @@ function parseArgs(argv: string[]): { flags: CliFlags; positionals: string[] } {
       positionals.push(a);
     }
   }
+
   return { flags, positionals };
 }
 
-/**
- * Print CLI usage help.
- */
 function printHelp(): void {
   console.log(`
 Usage:
-  # Direct signatures
   ts-node src/app/main.ts <sig1> [sig2 ...]
   ts-node src/app/main.ts --sigs sig1,sig2,sig3
+  ts-node src/app/main.ts --address <PUBKEY> [--total 3000] [--pageSize 1000] ...
 
-  # Fetch by address (with pagination)
-  ts-node src/app/main.ts --address <PUBKEY> [--total 3000] [--pageSize 1000] [--before <sig>] [--until <sig>] [--commitment confirmed]
-
-Options:
-  -s, --sigs         Comma-separated list of signatures
-  -a, --address      Address to fetch signatures from
-  -l, --limit        Single-page cap (legacy, max 1000). Prefer --total.
-      --total        Total signatures across pages (default: 50)
-      --pageSize     RPC page size (1..1000). Default: min(100, total)
-      --before       Return signatures before this one
-      --until        Return signatures until this one
-  -c, --commitment   processed | confirmed | finalized
-  -h, --help         Show help
-  --report [file]    Generate an HTML report (optional path)
-  --out <file>       Output path for report (overrides --report)
+Flags:
+  -s, --sigs
+  -a, --address
+  -l, --limit
+      --total
+      --pageSize
+      --before
+      --until
+  -c, --commitment
+  -h, --help
+  --report
+  --out
 `);
 }
 
-const debug = false;
-
-/**
- * Main execution flow.
- * - Parse CLI arguments
- * - Fetch signatures (direct or address mode with pagination)
- * - Batch-fetch transactions
- * - Parse into trade actions with candles + metadata
- * - Optionally output HTML report
- */
+// ----------------------------------------------------------------------------
+// MAIN
+// ----------------------------------------------------------------------------
 async function main() {
   const RPC_ENDPOINT = process.env.RPC_ENDPOINT!;
   if (!RPC_ENDPOINT) throw new Error("RPC_ENDPOINT is missing");
@@ -166,179 +109,53 @@ async function main() {
     process.exit(0);
   }
 
-  // ---- Determine input signatures ----
-  let sigs: string[] | undefined;
-  if (flags.sigs?.length) sigs = flags.sigs;
-  else if (positionals.length) sigs = positionals;
+  // Determine signatures from flags or positionals
+  let sigs: string[] | undefined =
+    flags.sigs?.length ? flags.sigs : positionals.length ? positionals : undefined;
 
-  const rpc = new SolanaRpcClient({
-    endpoint: RPC_ENDPOINT,
-    timeoutMs: 25_000,
-    maxRetries: 3,
-    retryBackoffMs: 300,
-    defaultCommitment: "confirmed",
-    log: (...args: any[]) => console.log(...args),
-  });
-  const metaSvc = new MetaplexMetadataService(rpc);
+  // Build unified input for tx2trade()
+  const input: Tx2TradeInput = {
+    rpcEndpoint: RPC_ENDPOINT,
 
-  // ---- Address mode with pagination ----
-  if (!sigs && flags.address) {
-    const total = Math.max(1, flags.total ?? flags.limit ?? 50);
-    const pageSize = flags.pageSize ?? Math.min(100, total);
+    sigs,
+    address: flags.address,
+    total: flags.total ?? flags.limit,
+    pageSize: flags.pageSize,
+    before: flags.before,
+    until: flags.until,
 
-    if (debug) {
-      console.log(
-        `🔎 Fetching up to ${total} signatures for ${flags.address} ` +
-        `(pageSize=${pageSize ?? Math.min(50, total)}, commitment=${flags.commitment ?? "confirmed"})`
-      );
-    }
+    debug: false,
+    windowTotalFromOut: 500,
+    requireAuthorityUserForOut: true,
+  };
 
-    sigs = await rpc.fetchAllSignaturesWithPagination(flags.address, {
-      total,
-      pageSize,
-      before: flags.before,
-      until: flags.until,
-      commitment: flags.commitment,
-    });
-
-    if (debug) console.log(`📥 Retrieved ${sigs.length} signature(s).`);
-  }
-
-  if (!sigs || sigs.length === 0) {
+  // No signatures + no address = invalid usage
+  if (!input.sigs && !input.address) {
     printHelp();
-    console.error("❌ No signatures provided and no address-based results.");
+    console.error("❌ No signatures provided and no --address specified.");
     process.exit(1);
   }
 
-  if (debug) console.log(`🔎 Processing ${sigs.length} transaction(s) from RPC: ${RPC_ENDPOINT}`);
-
-  // -------------------------------
-  // 1) Fetch transactions in batch
-  // -------------------------------
-  const fetched: Array<{ sig: string; tx: any | null }> = [];
-  const CHUNK = 10; // limit per batch to avoid RPC overload
-
-  for (let i = 0; i < sigs.length; i += CHUNK) {
-    const chunk = sigs.slice(i, i + CHUNK);
-    const txs = await rpc.getTransactionsParsedBatch(chunk, 0);
-
-    for (let j = 0; j < chunk.length; j++) {
-      fetched.push({ sig: chunk[j], tx: txs[j] ?? null });
-    }
-  }
-
-
-  // -------------------------------
-  // 2) Retrieve SOL/USDT candles
-  // -------------------------------
-  const validBlockTimes = fetched
-    .map(f => f.tx?.blockTime)
-    .filter((t): t is number => typeof t === "number" && t > 0);
-
-  let candles: any[] = [];
-
-  if (validBlockTimes.length > 0) {
-    const minBlockTime = Math.min(...validBlockTimes);
-    const maxBlockTime = Math.max(...validBlockTimes);
-  
-    // Round to minute boundaries
-    const startTimeMs = Math.floor(minBlockTime / 60) * 60 * 1000;
-    const endTimeMs = (Math.floor(maxBlockTime / 60) + 1) * 60 * 1000;
-  
-    const svc = new BinanceKlinesService({ market: "spot" });
-  
-    // 1. Build 1500 interval windows
-    const windows = buildWindows(startTimeMs, endTimeMs, 60_000, 1500);
-    if (debug) console.log(`📊 ${windows.length} window to fetch //`);
-  
-    // 2. tasks setup
-    const tasks = windows.map(w => async () => {
-      if (debug) {
-        console.log(`⏳ Fetching window ${new Date(w.startMs).toISOString()} → ${new Date(w.endMs).toISOString()}`);
-      }
-      const batch = await svc.fetchKlinesRange({
-        symbol: "SOLUSDT",
-        interval: "1m",
-        startTimeMs: w.startMs,
-        endTimeMs: w.endMs,
-        limitPerCall: 1500,
-      });
-      return batch;
-    });
-  
-    // 3. run concurrently
-    const results = await runWithLimit(tasks, 5);
-  
-    // 4. join & sort
-    candles = results.flat().sort((a, b) => a.openTime - b.openTime);
-  
-    if (debug) console.log(`📈 Binance returned ${candles.length} candles (1m).`);
-  }
-  
-
-  // -------------------------------
-  // 3) Parse into trade actions
-  // -------------------------------
-
   console.time("⏱ Total parsing");
-  
-  const allActions: any[] = [];
-  for (const { sig, tx } of fetched) {
-    //clipboardy.writeSync(JSON.stringify(tx, null, 2)); // Debug: copy raw tx to clipboard
 
-    if (!tx) {
-      if (debug) console.warn(`⚠️ Transaction not found: ${sig}`);
-      continue;
-    }
-    if (tx.meta?.err) {
-      if (debug) console.warn(`⚠️ Transaction failed: ${sig}`);
-      continue;
-    }
-
-    try {
-      const userWallet = inferUserWallet(tx);
-      if (debug) console.log("👤 Inferred wallet:", userWallet);
-
-       const legs = transactionToSwapLegs_SOLBridge(tx, userWallet, {
-        windowTotalFromOut: 500,
-        requireAuthorityUserForOut: true,
-        debug,
-      });  
-
-      if (debug) console.log(`🔗 TX ${sig}: ${legs.length} legs`);
-
-      const actions = legsToTradeActions(legs, {
-        txHash: sig,
-        wallet: userWallet,
-        blockTime: tx.blockTime,
-        candles,
-      });
-      if (debug) console.log(`📊 TX ${sig}: ${actions.length} actions`);
-
-
-      allActions.push(...actions);
-    } catch (err) {
-      console.error(`❌ Error parsing TX ${sig}:`, err);
-    }
-  } 
-
-  // -------------------------------
-  // 4) Enrich with metadata
-  // -------------------------------
-  const metaMap = await metaSvc.fetchTokenMetadataMapFromActions(allActions);
-  const enriched = metaSvc.enrichActionsWithMetadata(allActions, metaMap);
+  let enriched: any[] = [];
+  try {
+    enriched = await tx2trade(input);
+  } catch (err) {
+    console.error("❌ Error inside tx2trade:", err);
+    process.exit(1);
+  }
 
   console.timeEnd("⏱ Total parsing");
-  if (debug) {
-    console.log("\n🧬 Actions + metadata:");
-    console.log("Total RPC requests:", rpc.getRequestsCount());
-    console.log(`Total trades: ${enriched.length}`);
-    console.log(`Total transactions: ${fetched.length}`);
+
+  // Copy JSON result → clipboard
+  try {
+    clipboardy.writeSync(JSON.stringify(enriched, null, 2));
+  } catch {
+    console.warn("⚠️ Could not write to clipboard.");
   }
 
-  // -------------------------------
-  // 5) Generate report (optional)
-  // -------------------------------
+  // Optional HTML report
   if (flags.report) {
     const outFile =
       (typeof flags.report === "string" ? flags.report : undefined) ||
@@ -355,9 +172,6 @@ async function main() {
   }
 }
 
-//await pool.close();
-
-// Entrypoint
 main().catch((err) => {
   console.error("❌ Unhandled error in main():", err);
 });

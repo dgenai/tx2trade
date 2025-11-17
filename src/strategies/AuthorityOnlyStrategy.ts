@@ -8,9 +8,9 @@ export class AuthorityOnlyStrategy implements LegStrategy {
       edges: TransferEdge[],
       userTokenAccounts: Set<string>,  
       userWallet: string,
-      opts?: { windowTotalFromOut?: number; debug?: boolean; log?: (...args: any[]) => void }
+      opts: { windowTotalFromOut?: number; debug?: boolean; log?: (...args: any[]) => void }
     ): SwapLeg[] {
-      const { windowTotalFromOut = 400, debug = true, log = () => {} } = opts ?? {};
+      const { windowTotalFromOut = 400, debug = opts.debug || false, log = () => {} } = opts ?? {};
       const dbg = (...a:any[]) => { if (debug) log("[AuthorityOnly]", ...a); };
   
       const userSolOuts = edges.filter(

@@ -1,27 +1,47 @@
 import { SolanaRpcClient } from "./services/SolanaRpcClient.js";
 import { MetaplexMetadataService } from "./services/MetaplexMetadataService.js";
+import { BinanceKlinesService } from "./services/BinanceKlinesService.js";
 
 import { transactionToSwapLegs_SOLBridge } from "./core/transactionToSwapLegs.js";
 import { legsToTradeActions } from "./core/actions.js";
 import { inferUserWallet } from "./core/inferUserWallet.js";
-import { chunkArray } from "./utils/helpers.js";
-import { BinanceKlinesService } from "./services/BinanceKlinesService.js";
+
+export { SolanaRpcClient } from "./services/SolanaRpcClient.js";
 
 /**
- * Options for customizing transaction-to-trade parsing.
+ * Unified input format for tx2trade(), compatible with both CLI modes:
+ *  - Direct signature list
+ *  - Address mode with pagination + strict count validation
  */
-type Tx2TradeOpts = {
+export type Tx2TradeInput = {
+  // Signature mode
+  sigs?: string[];
+
+  // Address mode (same structure as CLI)
+  address?: string;
+  total?: number;
+  pageSize?: number;
+  before?: string;
+  until?: string;
+
+  // Required
+  rpcEndpoint: string;
+
+  // Parsing options
   debug?: boolean;
   windowTotalFromOut?: number;
   requireAuthorityUserForOut?: boolean;
 };
 
-export { SolanaRpcClient } from "./services/SolanaRpcClient.js";
-
-
-function buildWindows(startTimeMs: number, endTimeMs: number, intervalMs = 60_000, maxCandles = 1000) {
+/**
+ * Build windows for Binance klines queries, aligned with CLI:
+ *  - 1-minute granularity
+ *  - 1500 candles per API call
+ */
+function buildWindows(startTimeMs: number, endTimeMs: number, intervalMs = 60_000, maxCandles = 1500) {
   const maxSpan = intervalMs * maxCandles;
   const windows: { startMs: number; endMs: number }[] = [];
+
   let curStart = startTimeMs;
   while (curStart < endTimeMs) {
     const curEnd = Math.min(curStart + maxSpan - 1, endTimeMs);
@@ -31,154 +51,206 @@ function buildWindows(startTimeMs: number, endTimeMs: number, intervalMs = 60_00
   return windows;
 }
 
-// limiteur de concurrence simple
-async function runWithLimit<T>(tasks: (() => Promise<T>)[], concurrency = 20): Promise<T[]> {
+/** Concurrency limiter for parallel Binance window fetches */
+async function runWithLimit<T>(tasks: (() => Promise<T>)[], concurrency = 5): Promise<T[]> {
   const results: T[] = [];
   let index = 0;
+
   async function worker() {
     while (index < tasks.length) {
       const i = index++;
       results[i] = await tasks[i]();
     }
   }
+
   const workers = Array.from({ length: concurrency }, () => worker());
   await Promise.all(workers);
   return results;
 }
 
-
-
 /**
- * Convert a list of Solana transaction signatures into enriched trade actions.
- * Now:
- *  1) Fetch ALL transactions in batches
- *  2) Parse AFTER everything is fetched
- *  3) Enrich with Metaplex metadata
+ * tx2trade()
+ * ==========
+ * Main pipeline used by the CLI:
+ *  - Signature-mode or address-mode
+ *  - Full transaction fetch with strict validation
+ *  - Skip failed tx (meta.err)
+ *  - Klines enrichment identical to CLI
+ *  - Legs → Actions → Metadata enrichment
+ *
+ * Output: Array of enriched trade actions
  */
-export async function tx2trade(
-  sigs: string[],
-  rpcEndpoint: string,
-  opts: Tx2TradeOpts = {}
-) {
+export async function tx2trade(input: Tx2TradeInput) {
   const {
+    sigs,
+    address,
+    total,
+    pageSize,
+    before,
+    until,
+    rpcEndpoint,
+
     debug = false,
     windowTotalFromOut = 500,
     requireAuthorityUserForOut = true,
-  } = opts;
+  } = input;
 
-  // Initialize Solana RPC client with retry & timeout strategy
+  if (!rpcEndpoint) {
+    throw new Error("tx2trade: rpcEndpoint is required");
+  }
+
+  // RPC client identical to CLI
   const rpc = new SolanaRpcClient({
     endpoint: rpcEndpoint,
     timeoutMs: 25_000,
     maxRetries: 3,
-    retryBackoffMs: 300,
+    retryBackoffMs: 3000,
     defaultCommitment: "confirmed",
     log: (...args: any[]) => console.log(...args),
   });
 
-  // Service for fetching and enriching with Metaplex token metadata
   const metaSvc = new MetaplexMetadataService(rpc);
 
-  // 1) FETCH — Split signatures into batches to avoid RPC limits
-  const sigChunks = chunkArray(sigs, 50);
+  // --------------------------------------------------------------------
+  // MODE ADDRESS — IDENTICAL LOGIC TO CLI WITH WHILE-PAGINATION
+  // --------------------------------------------------------------------
+  let finalSignatures: string[] | undefined = sigs;
+
+  if (!sigs && address) {
+    const required = Math.max(1, total ?? pageSize ?? 50);
+    const perPage = pageSize ?? Math.min(100, required);
+
+    let cursor = before;
+    let fetchedSigs: string[] = [];
+
+    while (fetchedSigs.length < required) {
+      const remaining = required - fetchedSigs.length;
+      const batch = Math.min(perPage, remaining);
+
+      const page = await rpc.fetchAllSignaturesWithPagination(address, {
+        total: batch,
+        pageSize: batch,
+        before: cursor,
+        until,
+      });
+
+      if (page.length === 0) break;
+
+      fetchedSigs.push(...page);
+      cursor = page[page.length - 1];
+    }
+
+    if (fetchedSigs.length < required) {
+      throw new Error(`tx2trade: needed ${required} signatures but only found ${fetchedSigs.length}`);
+    }
+
+    finalSignatures = fetchedSigs.slice(0, required);
+  }
+
+  // --------------------------------------------------------------------
+  // VALIDATION SIGNATURES MODE
+  // --------------------------------------------------------------------
+  if (!finalSignatures || finalSignatures.length === 0) {
+    throw new Error("tx2trade: no signatures to process");
+  }
+
+  // --------------------------------------------------------------------
+  // FETCH TRANSACTIONS — CHUNK=10 (IDENTICAL TO CLI)
+  // --------------------------------------------------------------------
+  const CHUNK = 10;
   const fetched: Array<{ sig: string; tx: any | null }> = [];
 
-  for (const chunk of sigChunks) {
+  for (let i = 0; i < finalSignatures.length; i += CHUNK) {
+    const chunk = finalSignatures.slice(i, i + CHUNK);
     const txs = await rpc.getTransactionsParsedBatch(chunk, 0);
-    for (let i = 0; i < chunk.length; i++) {
-      fetched.push({ sig: chunk[i], tx: txs[i] ?? null });
+
+    for (let j = 0; j < chunk.length; j++) {
+      fetched.push({ sig: chunk[j], tx: txs[j] ?? null });
     }
   }
 
+  // Strict count validation (identical to CLI)
+  if (fetched.length !== finalSignatures.length) {
+    throw new Error(`BUG: fetched=${fetched.length} required=${finalSignatures.length}`);
+  }
 
-  // -------------------------------
-  // 2) Retrieve SOL/USDT candles
-  // -------------------------------
-  const validBlockTimes = fetched
+  // --------------------------------------------------------------------
+  // CANDLES (IDENTICAL TO CLI)
+  // --------------------------------------------------------------------
+  const validTimes = fetched
     .map(f => f.tx?.blockTime)
     .filter((t): t is number => typeof t === "number" && t > 0);
 
   let candles: any[] = [];
-  if (validBlockTimes.length > 0) {
-    const minBlockTime = Math.min(...validBlockTimes);
-    const maxBlockTime = Math.max(...validBlockTimes);
-  
-    // Round to minute boundaries
-    const startTimeMs = Math.floor(minBlockTime / 60) * 60 * 1000;
-    const endTimeMs = (Math.floor(maxBlockTime / 60) + 1) * 60 * 1000;
-  
+
+  if (validTimes.length > 0) {
+    const min = Math.min(...validTimes);
+    const max = Math.max(...validTimes);
+
+    const startMs = Math.floor(min / 60) * 60 * 1000;
+    const endMs = (Math.floor(max / 60) + 1) * 60 * 1000;
+
     const svc = new BinanceKlinesService({ market: "spot" });
-  
-     // 1. Build 1500 interval windows
-    const windows = buildWindows(startTimeMs, endTimeMs, 60_000, 1000);
-    if (debug) console.log(`📊 ${windows.length} fenêtre(s) à récupérer en parallèle`);
-  
-    // 2. setup tasks
-    const tasks = windows.map(w => async () => {
-      if (debug) {
-        console.log(`⏳ Fetching window ${new Date(w.startMs).toISOString()} → ${new Date(w.endMs).toISOString()}`);
-      }
-      const batch = await svc.fetchKlinesRange({
+
+    const windows = buildWindows(startMs, endMs, 60_000, 1500);
+
+    const tasks = windows.map(w => async () =>
+      svc.fetchKlinesRange({
         symbol: "SOLUSDT",
         interval: "1m",
         startTimeMs: w.startMs,
         endTimeMs: w.endMs,
         limitPerCall: 1500,
-      });
-      return batch;
-    });
-  
-    // 3. run with concurrency
-    const results = await runWithLimit(tasks, 5);
-  
-    // 4. join and sort
-    candles = results.flat().sort((a, b) => a.openTime - b.openTime);
-  
-    if (debug) console.log(`📈 Binance returned ${candles.length} candles (1m).`);
-  }
-  
+      })
+    );
 
-  // 2) PARSE — Only after all tx are fetched
+    const results = await runWithLimit(tasks, 5);
+    candles = results.flat().sort((a, b) => a.openTime - b.openTime);
+  }
+
+  // --------------------------------------------------------------------
+  // PARSE TRANSACTIONS
+  // --------------------------------------------------------------------
   const allActions: any[] = [];
 
   for (const { sig, tx } of fetched) {
     if (!tx) {
-      console.warn(`⚠️ Transaction not found: ${sig}`);
+      console.warn(`⚠️ Missing transaction: ${sig}`);
+      continue;
+    }
+
+    if (tx.meta?.err) {
+      if (debug) console.warn(`⚠️ Skip failed TX: ${sig}`);
       continue;
     }
 
     try {
-      // Infer the user wallet involved
-      const userWallet = inferUserWallet(tx);
+      const wallet = inferUserWallet(tx);
 
-      // Convert transaction into swap legs
-      const legs = transactionToSwapLegs_SOLBridge(tx, userWallet, {
+      const legs = transactionToSwapLegs_SOLBridge(sig, tx, wallet, {
         windowTotalFromOut,
         requireAuthorityUserForOut,
         debug,
       });
 
-      // Convert legs into high-level trade actions
       const actions = legsToTradeActions(legs, {
         txHash: sig,
-        wallet: userWallet,
+        wallet,
         blockTime: tx.blockTime,
         candles,
       });
 
-      if (debug) {
-        console.debug("tx2trade result", { sig, actions, legsCount: legs.length });
-      }
-
       allActions.push(...actions);
-    } catch (err) {
-      console.error(`❌ Error parsing TX ${sig}:`, err);
+    } catch (e) {
+      console.error(`❌ Error parsing ${sig}:`, e);
     }
   }
 
-  // 3) ENRICH — Enrich aggregated actions with token metadata
+  // --------------------------------------------------------------------
+  // METADATA ENRICHMENT (IDENTICAL TO CLI)
+  // --------------------------------------------------------------------
   const metaMap = await metaSvc.fetchTokenMetadataMapFromActions(allActions);
   const enriched = metaSvc.enrichActionsWithMetadata(allActions, metaMap);
 
-  return enriched; // Final aggregated & enriched trade history
+  return enriched;
 }

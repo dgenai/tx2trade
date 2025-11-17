@@ -214,8 +214,8 @@ function attachFeesAndNetsToLegs({ tx, legs, edges, tags, userWallet, windowSeq 
  * - no short-circuit (do not return on first match)
  * - consume used edges so subsequent strategies don’t reuse them
  */
-export function transactionToSwapLegs_SOLBridge(tx, userWallet, opts) {
-    const { debug = true, windowOutToSolIn, windowHubToUserIn, windowTotalFromOut, requireAuthorityUserForOut, minWsolLamports = 100000, dustRelPct = 0.005, maxPasses = 6, windowAroundIn = 200 } = opts ?? {};
+export function transactionToSwapLegs_SOLBridge(sig, tx, userWallet, opts) {
+    const { debug = opts.debug | false, windowOutToSolIn, windowHubToUserIn, windowTotalFromOut, requireAuthorityUserForOut, minWsolLamports = 100000, dustRelPct = 0.005, maxPasses = 6, windowAroundIn = 200 } = opts ?? {};
     const log = (...args) => {
         if (debug)
             console.debug("[txToLegs]", ...args);

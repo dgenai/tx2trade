@@ -22,7 +22,7 @@ export class AggregatorHubStrategy implements LegStrategy {
       windowOutToSolIn = 120,
       windowHubToUserIn = 120,
       windowTotalFromOut = 400,
-      debug = true,
+      debug = opts.debug || false,
       log = (..._args: any[]) => {},
       tags,
     } = opts ?? {};

@@ -38,14 +38,13 @@ export class WalletToWalletTokenTransferStrategy implements LegStrategy {
 
     // Step 1: collect candidate user-out edges (excluding WSOL)
     const userOuts = edges.filter((e) =>
-      tags?.get(e.seq) === "normal" &&
+      tags?.get(e.seq) !== "fee" && tags?.get(e.seq) !== "dust" &&
       e.authority === userWallet &&
       userTokenAccounts.has(e.source) &&
-      !userTokenAccounts.has(e.destination) &&
       e.mint !== WSOL_MINT &&
       e.amount > 0
     );
-
+ 
     if (!userOuts.length) return [];
 
     dbg("User-out candidates", userOuts.map(e => ({
@@ -91,6 +90,7 @@ export class WalletToWalletTokenTransferStrategy implements LegStrategy {
         boughtMint: "",
         boughtAmount: 0,
         path: cluster,
+        targetWallet: cluster[cluster.length - 1].destination
       };
 
       legs.push(leg);
