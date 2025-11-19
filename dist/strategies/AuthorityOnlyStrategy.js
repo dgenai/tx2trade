@@ -3,11 +3,11 @@ export class AuthorityOnlyStrategy {
     constructor() {
         this.name = "AuthorityOnly";
     }
-    match(edges, userTokenAccounts, userWallet, opts) {
+    match(edges, userTokenAccounts, userWallets, opts) {
         const { windowTotalFromOut = 400, debug = opts.debug || false, log = () => { } } = opts ?? {};
         const dbg = (...a) => { if (debug)
             log("[AuthorityOnly]", ...a); };
-        const userSolOuts = edges.filter((e) => e.mint === WSOL_MINT && e.authority === userWallet);
+        const userSolOuts = edges.filter((e) => e.mint === WSOL_MINT && userWallets.includes(e.authority ?? ""));
         const tokenIns = edges.filter((e) => e.mint !== WSOL_MINT && userTokenAccounts.has(e.destination));
         if (!userSolOuts.length || !tokenIns.length)
             return [];
@@ -21,6 +21,7 @@ export class AuthorityOnlyStrategy {
             legs.push({
                 soldMint: WSOL_MINT,
                 soldAmount: bestOut.amount,
+                userWallet: bestOut.authority || "",
                 boughtMint: inn.mint,
                 boughtAmount: inn.amount,
                 path: [bestOut, inn],

@@ -4,7 +4,7 @@ if (!parentPort)
     throw new Error("This file must be run as a worker");
 parentPort.on("message", (job) => {
     try {
-        const legs = transactionToSwapLegs_SOLBridge("", job.tx, job.userWallet, {
+        const legs = transactionToSwapLegs_SOLBridge("", job.tx, job.userWallets, {
             windowTotalFromOut: 500,
             requireAuthorityUserForOut: true,
             debug: job.debug,

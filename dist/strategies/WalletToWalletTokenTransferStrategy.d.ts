@@ -10,7 +10,7 @@ import { SwapLeg, TransferEdge } from "../types.js";
  */
 export declare class WalletToWalletTokenTransferStrategy implements LegStrategy {
     name: string;
-    match(edges: TransferEdge[], userTokenAccounts: Set<string>, userWallet: string, opts: {
+    match(edges: TransferEdge[], userTokenAccounts: Set<string>, userWallets: string[], opts: {
         debug?: boolean;
         log?: (...args: any[]) => void;
         tags?: Map<number, "fee" | "dust" | "normal" | "tip">;

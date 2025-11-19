@@ -18,7 +18,7 @@ export declare function buildAccountIndexSkeleton(tx: any, opts?: {
  *  1) Accounts in pre/post balances (owner == user)
  *  2) Accounts created/initialized in this transaction for user
  */
-export declare function extractUserTokenAccounts(tx: any, userWallet: string, opts?: {
+export declare function extractUserTokenAccounts(tx: any, userWallets: string[], opts?: {
     debug?: boolean;
 }): Set<string>;
 //# sourceMappingURL=accountIndex.d.ts.map

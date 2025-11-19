@@ -1,5 +1,6 @@
 import { WSOL_MINT } from "../types.js";
 import { blockTimeToDate } from "../utils/helpers.js";
+import { STABLES } from "../constants.js";
 /**
  * Retrieve the USD price of SOL at (or nearest to) a given block time.
  */
@@ -61,25 +62,21 @@ export function legsToTradeActions(legs, ctx) {
         log("Processing leg", leg);
         const soldAmt = Number(leg.soldAmount ?? 0);
         const boughtAmt = Number(leg.boughtAmount ?? 0);
-        // Fees
         const router = Number(leg.routerFees ?? 0);
         const tip = Number(leg.tip ?? 0);
         const network = Number(leg.networkFee ?? 0);
         const rent = Number(leg.rent ?? 0);
+        // IMPORTANT : pick correct wallet for this leg
+        const wallet = leg.userWallet ?? ctx.wallets[0];
         // -------------------------------------------------------------------------
-        // --- TRANSFER-OUT --------------------------------------------------------
+        // TRANSFER-OUT
         // -------------------------------------------------------------------------
-        // This leg was produced by WalletToGatewayTransferStrategy:
-        // - soldMint:   token sent by the user
-        // - soldAmount: amount
-        // - boughtMint: "" (intentionally empty)
-        // - boughtAmount: 0
         if (boughtAmt === 0 && !leg.boughtMint && soldAmt > 0) {
             actions.push({
                 transactionDate: txDate,
                 transactionHash: ctx.txHash,
                 transactionType: "transfer",
-                walletAddress: ctx.wallet,
+                walletAddress: wallet,
                 sold: {
                     address: leg.soldMint,
                     amount: soldAmt,
@@ -95,7 +92,7 @@ export function legsToTradeActions(legs, ctx) {
             continue;
         }
         // -------------------------------------------------------------------------
-        // BUY (SOL → token)
+        // BUY (SOL → Token)
         // -------------------------------------------------------------------------
         if (leg.soldMint === WSOL_MINT) {
             const coreSol = Number(leg.soldCore ?? soldAmt);
@@ -109,7 +106,7 @@ export function legsToTradeActions(legs, ctx) {
                 transactionDate: txDate,
                 transactionHash: ctx.txHash,
                 transactionType: "buy",
-                walletAddress: ctx.wallet,
+                walletAddress: wallet,
                 sold: {
                     address: WSOL_MINT,
                     symbol: "SOL",
@@ -127,7 +124,7 @@ export function legsToTradeActions(legs, ctx) {
             continue;
         }
         // -------------------------------------------------------------------------
-        // SELL (token → SOL)
+        // SELL (Token → SOL)
         // -------------------------------------------------------------------------
         if (leg.boughtMint === WSOL_MINT) {
             const netSol = boughtAmt;
@@ -142,7 +139,7 @@ export function legsToTradeActions(legs, ctx) {
                 transactionDate: txDate,
                 transactionHash: ctx.txHash,
                 transactionType: "sell",
-                walletAddress: ctx.wallet,
+                walletAddress: wallet,
                 sold: {
                     address: leg.soldMint,
                     amount: soldAmt,
@@ -160,13 +157,65 @@ export function legsToTradeActions(legs, ctx) {
             continue;
         }
         // -------------------------------------------------------------------------
-        // TOKEN ↔ TOKEN swap (no pricing)
+        // TOKEN ↔ TOKEN (NO SWAP ALLOWED)
+        // Classification forced into BUY or SELL
         // -------------------------------------------------------------------------
+        const soldIsStable = STABLES.has(leg.soldMint);
+        const boughtIsStable = STABLES.has(leg.boughtMint);
+        if (soldIsStable && !boughtIsStable) {
+            // Stable → Token = BUY
+            const usd = soldAmt;
+            const unit = boughtAmt > 0 ? usd / boughtAmt : null;
+            actions.push({
+                transactionDate: txDate,
+                transactionHash: ctx.txHash,
+                transactionType: "buy",
+                walletAddress: wallet,
+                sold: {
+                    address: leg.soldMint,
+                    amount: soldAmt,
+                    unitPriceUsd: "1",
+                    amountUsd: safeUsd(usd),
+                },
+                bought: {
+                    address: leg.boughtMint,
+                    amount: boughtAmt,
+                    unitPriceUsd: safeUsd(unit),
+                    amountUsd: safeUsd(usd),
+                },
+            });
+            continue;
+        }
+        if (!soldIsStable && boughtIsStable) {
+            // Token → Stable = SELL
+            const usd = boughtAmt;
+            const unit = soldAmt > 0 ? usd / soldAmt : null;
+            actions.push({
+                transactionDate: txDate,
+                transactionHash: ctx.txHash,
+                transactionType: "sell",
+                walletAddress: wallet,
+                sold: {
+                    address: leg.soldMint,
+                    amount: soldAmt,
+                    unitPriceUsd: safeUsd(unit),
+                    amountUsd: safeUsd(usd),
+                },
+                bought: {
+                    address: leg.boughtMint,
+                    amount: boughtAmt,
+                    unitPriceUsd: "1",
+                    amountUsd: safeUsd(usd),
+                },
+            });
+            continue;
+        }
+        // Default token↔token = BUY (never swap)
         actions.push({
             transactionDate: txDate,
             transactionHash: ctx.txHash,
             transactionType: "buy",
-            walletAddress: ctx.wallet,
+            walletAddress: wallet,
             sold: {
                 address: leg.soldMint,
                 amount: soldAmt,

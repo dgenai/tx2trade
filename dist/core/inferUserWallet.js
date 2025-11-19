@@ -74,4 +74,88 @@ export function inferUserWallet(tx) {
     const fallback = humanSigners[0] ?? signers[0] ?? "";
     return fallback;
 }
+/**
+ * Extract ALL human wallets involved in a Solana transaction.
+ *
+ * Includes:
+ *  - Signers
+ *  - Owners from pre/post token balances
+ *  - Authorities in SPL instructions
+ *  - ATA creators (wallet field)
+ *
+ * Excludes:
+ *  - Programs
+ *  - Sysvars
+ *  - Known PDAs
+ */
+export function inferUserWallets(tx) {
+    const wallets = new Set();
+    const accountKeys = tx?.transaction?.message?.accountKeys ?? [];
+    function to58(k) {
+        if (!k)
+            return "";
+        if (typeof k === "string")
+            return k;
+        if (k.toBase58)
+            return k.toBase58();
+        if (k.pubkey?.toBase58)
+            return k.pubkey.toBase58();
+        if (typeof k.pubkey === "string")
+            return k.pubkey;
+        return String(k.pubkey ?? "");
+    }
+    // -----------------------------
+    // 1. Signers  (source de vérité)
+    // -----------------------------
+    const signers = new Set();
+    for (const k of accountKeys) {
+        if (k?.signer) {
+            const w = to58(k);
+            wallets.add(w);
+            signers.add(w);
+        }
+    }
+    // -----------------------------
+    // 2. Owners  (mais uniquement s'ils sont signers)
+    // -----------------------------
+    const addOwner = (tb) => {
+        for (const e of tb ?? []) {
+            const o = e?.owner;
+            if (o && signers.has(o))
+                wallets.add(o);
+        }
+    };
+    addOwner(tx?.meta?.preTokenBalances);
+    addOwner(tx?.meta?.postTokenBalances);
+    // -----------------------------
+    // 3. ATA creations
+    // -----------------------------
+    function collectATA(ix) {
+        if (ix?.parsed?.type === "create" || ix?.parsed?.type === "createIdempotent") {
+            const w = ix.parsed?.info?.wallet;
+            if (w && signers.has(w))
+                wallets.add(w);
+        }
+    }
+    for (const ix of tx?.transaction?.message?.instructions ?? [])
+        collectATA(ix);
+    for (const inner of tx?.meta?.innerInstructions ?? [])
+        for (const ix of inner?.instructions ?? [])
+            collectATA(ix);
+    // -----------------------------
+    // Remove programs/sysvars
+    // -----------------------------
+    const blacklist = new Set([
+        "11111111111111111111111111111111",
+        "ComputeBudget111111111111111111111111111111",
+        "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
+        "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL",
+        "MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr"
+    ]);
+    for (const w of [...wallets]) {
+        if (!w || blacklist.has(w))
+            wallets.delete(w);
+    }
+    return [...wallets];
+}
 //# sourceMappingURL=inferUserWallet.js.map

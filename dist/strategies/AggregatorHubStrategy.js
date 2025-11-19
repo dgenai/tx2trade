@@ -4,7 +4,7 @@ export class AggregatorHubStrategy {
     constructor() {
         this.name = "AggregatorHub";
     }
-    match(edges, userTokenAccounts, userWallet, opts) {
+    match(edges, userTokenAccounts, userWallets, opts) {
         const { windowOutToSolIn = 120, windowHubToUserIn = 120, windowTotalFromOut = 400, debug = opts.debug || false, log = (..._args) => { }, tags, } = opts ?? {};
         const dbg = (...args) => {
             if (debug)
@@ -13,13 +13,13 @@ export class AggregatorHubStrategy {
         const legs = [];
         // OUTs: user → hub (non-WSOL)
         const userOuts = edges.filter((e) => userTokenAccounts.has(e.source) &&
-            e.authority === userWallet &&
+            userWallets.includes(e.authority ?? "") &&
             e.mint !== WSOL_MINT);
         // INs: hub → user (non-WSOL, authority ≠ user)
         const userIns = edges.filter((e) => userTokenAccounts.has(e.destination) &&
-            e.authority !== userWallet &&
+            !userWallets.includes(e.authority ?? "") &&
             e.mint !== WSOL_MINT);
-        const hubs = findSolHubsByAuthority(edges, userWallet, { debug });
+        const hubs = findSolHubsByAuthority(edges, userWallets, { debug });
         dbg("Candidates collected", {
             totalEdges: edges.length,
             userOuts: userOuts.length,
@@ -101,6 +101,7 @@ export class AggregatorHubStrategy {
             legs.push({
                 soldMint: out.mint,
                 soldAmount: out.amount,
+                userWallet: out.authority || "",
                 boughtMint: WSOL_MINT,
                 boughtAmount: solInSum,
                 path: solInEdges.concat([out]),
@@ -119,6 +120,7 @@ export class AggregatorHubStrategy {
                     boughtMint: inn.mint,
                     boughtAmount: inn.amount,
                     path: [...solOuts, inn],
+                    userWallet: out.authority || "",
                 });
                 dbg("Leg created (SOL→token)", {
                     solOutSeqs: solOuts.map((s) => s.seq),

@@ -26,11 +26,11 @@ type Edge = {
  *
  * @param tx         Parsed Solana transaction
  * @param edges      Existing edges (to be augmented)
- * @param userWallet User wallet public key
+ * @param userWallets User wallet public keys
  * @param opts       Options:
  *                     - dustLamports: ignore deltas below this threshold (default: 500)
  */
-export declare function pushUserSolDeltaEdge(tx: any, edges: Edge[], userWallet: string, opts?: {
+export declare function pushUserSolDeltaEdge(tx: any, edges: Edge[], userWallets: string[], opts?: {
     dustLamports?: number;
 }): void;
 export {};

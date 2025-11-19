@@ -3,7 +3,7 @@ export class WsolToTokenStrategy {
     constructor() {
         this.name = "WsolToToken";
     }
-    match(edges, userTokenAccounts, userWallet, opts) {
+    match(edges, userTokenAccounts, userWallets, opts) {
         const { windowTotalFromOut = 400, windowSolAfterIn = 50, windowAroundIn, // if defined, overrides before/after with |seq(out)-seq(in)| <= windowAroundIn
         debug = opts.debug || false, log = () => { }, tags, minLamportsToSum = 50000, } = opts ?? {};
         // Internal debug logger
@@ -12,9 +12,11 @@ export class WsolToTokenStrategy {
         // Convert SOL to lamports (1e9 multiplier, rounded)
         const toLamports = (amt) => Math.round(amt * 1000000000);
         // Candidate SOL outflows from user wallet
-        const userSolOuts = edges.filter((e) => e.mint === WSOL_MINT && e.authority === userWallet);
+        const userSolOuts = edges.filter((e) => e.mint === WSOL_MINT && (userWallets.includes(e.authority ?? "") || userTokenAccounts.has(e.source)));
+        console.log(userTokenAccounts);
+        console.log(edges);
         // Candidate token inflows into user-owned accounts (authority ≠ userWallet to exclude self-transfers)
-        const userTokenIns = edges.filter((e) => e.mint !== WSOL_MINT && userTokenAccounts.has(e.destination) && e.authority !== userWallet);
+        const userTokenIns = edges.filter((e) => e.mint !== WSOL_MINT && userTokenAccounts.has(e.destination) && !userWallets.includes(e.authority ?? ""));
         if (!userSolOuts.length || !userTokenIns.length)
             return [];
         const legs = [];
@@ -63,8 +65,10 @@ export class WsolToTokenStrategy {
                 continue;
             // Aggregate SOL outflow
             const soldAmount = setForSum.reduce((acc, e) => acc + e.amount, 0);
+            const userWallet = setForSum[0].authority || "";
             // Build the swap leg
             legs.push({
+                userWallet,
                 soldMint: WSOL_MINT,
                 soldAmount,
                 boughtMint: inn.mint,

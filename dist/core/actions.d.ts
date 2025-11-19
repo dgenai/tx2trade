@@ -4,7 +4,7 @@ import { SwapLeg, TradeAction } from "../types.js";
  */
 export declare function legsToTradeActions(legs: SwapLeg[], ctx: {
     txHash: string;
-    wallet: string;
+    wallets: string[];
     blockTime: number;
     candles?: any[];
     debug?: boolean;

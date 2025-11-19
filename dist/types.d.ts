@@ -53,6 +53,7 @@ export interface SwapLeg {
     boughtAmount: number;
     path: TransferEdge[];
     targetWallet?: string;
+    userWallet: string;
     soldCore?: number;
     routerFees?: number;
     tip?: number;

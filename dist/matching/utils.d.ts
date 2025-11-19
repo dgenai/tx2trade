@@ -4,7 +4,7 @@ export type SolHub = {
     inEdges: TransferEdge[];
     outEdges: TransferEdge[];
 };
-export declare function findSolHubsByAuthority(edges: TransferEdge[], userWallet: string, opts?: {
+export declare function findSolHubsByAuthority(edges: TransferEdge[], userWallets: string[], opts?: {
     debug?: boolean;
     log?: (...args: any[]) => void;
 }): Map<string, SolHub>;

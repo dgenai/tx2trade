@@ -2,7 +2,7 @@ import { LegStrategy } from "./LegStrategy.js";
 import { SwapLeg, TransferEdge } from "../types.js";
 export declare class AggregatorHubStrategy implements LegStrategy {
     name: string;
-    match(edges: TransferEdge[], userTokenAccounts: Set<string>, userWallet: string, opts: {
+    match(edges: TransferEdge[], userTokenAccounts: Set<string>, userWallets: string[], opts: {
         windowOutToSolIn?: number;
         windowHubToUserIn?: number;
         windowTotalFromOut?: number;

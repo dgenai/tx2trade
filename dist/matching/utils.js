@@ -1,5 +1,5 @@
 import { WSOL_MINT } from "../types.js";
-export function findSolHubsByAuthority(edges, userWallet, opts) {
+export function findSolHubsByAuthority(edges, userWallets, opts) {
     const { debug = false } = opts ?? {};
     const log = opts?.log ?? ((...args) => { if (debug)
         console.debug("[findSolHubsByAuthority]", ...args); });
@@ -7,7 +7,7 @@ export function findSolHubsByAuthority(edges, userWallet, opts) {
     for (const e of edges) {
         if (e.mint !== WSOL_MINT)
             continue;
-        if (!e.authority || e.authority === userWallet)
+        if (!e.authority || userWallets.includes(e.authority ?? ""))
             continue; // aggregator/MM only
         log("Processing edge", e);
         // incoming to hub

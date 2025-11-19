@@ -11,7 +11,7 @@ export class WalletToWalletTokenTransferStrategy {
     constructor() {
         this.name = "WalletToGatewayTransfer";
     }
-    match(edges, userTokenAccounts, userWallet, opts) {
+    match(edges, userTokenAccounts, userWallets, opts) {
         const { debug = false, log = () => { }, tags, windowSeq = 40, // reasonable default window for multiple gateway sends
          } = opts ?? {};
         const dbg = (...args) => {
@@ -21,7 +21,7 @@ export class WalletToWalletTokenTransferStrategy {
         const legs = [];
         // Step 1: collect candidate user-out edges (excluding WSOL)
         const userOuts = edges.filter((e) => tags?.get(e.seq) !== "fee" && tags?.get(e.seq) !== "dust" &&
-            e.authority === userWallet &&
+            userWallets.includes(e.authority ?? "") &&
             userTokenAccounts.has(e.source) &&
             e.mint !== WSOL_MINT &&
             e.amount > 0);
@@ -57,8 +57,10 @@ export class WalletToWalletTokenTransferStrategy {
                 seqs: cluster.map(x => x.seq),
                 destinations: cluster.map(x => x.destination),
             });
+            const userWallet = cluster[0].authority || "";
             // Build the outbound leg
             const leg = {
+                userWallet,
                 soldMint: e.mint,
                 soldAmount: totalAmount,
                 boughtMint: "",

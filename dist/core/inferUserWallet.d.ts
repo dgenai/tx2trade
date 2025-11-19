@@ -10,4 +10,19 @@
  *  6. Fallback to the first signer.
  */
 export declare function inferUserWallet(tx: any): string;
+/**
+ * Extract ALL human wallets involved in a Solana transaction.
+ *
+ * Includes:
+ *  - Signers
+ *  - Owners from pre/post token balances
+ *  - Authorities in SPL instructions
+ *  - ATA creators (wallet field)
+ *
+ * Excludes:
+ *  - Programs
+ *  - Sysvars
+ *  - Known PDAs
+ */
+export declare function inferUserWallets(tx: any): string[];
 //# sourceMappingURL=inferUserWallet.d.ts.map

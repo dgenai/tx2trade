@@ -3,7 +3,7 @@ import { MetaplexMetadataService } from "./services/MetaplexMetadataService.js";
 import { BinanceKlinesService } from "./services/BinanceKlinesService.js";
 import { transactionToSwapLegs_SOLBridge } from "./core/transactionToSwapLegs.js";
 import { legsToTradeActions } from "./core/actions.js";
-import { inferUserWallet } from "./core/inferUserWallet.js";
+import { inferUserWallets } from "./core/inferUserWallet.js";
 export { SolanaRpcClient } from "./services/SolanaRpcClient.js";
 /**
  * Build windows for Binance klines queries, aligned with CLI:
@@ -151,15 +151,15 @@ export async function tx2trade(input) {
             continue;
         }
         try {
-            const wallet = inferUserWallet(tx);
-            const legs = transactionToSwapLegs_SOLBridge(sig, tx, wallet, {
+            const wallets = inferUserWallets(tx);
+            const legs = transactionToSwapLegs_SOLBridge(sig, tx, wallets, {
                 windowTotalFromOut,
                 requireAuthorityUserForOut,
                 debug,
             });
             const actions = legsToTradeActions(legs, {
                 txHash: sig,
-                wallet,
+                wallets,
                 blockTime: tx.blockTime,
                 candles,
             });

@@ -3,7 +3,7 @@ export class ProxyVaultSwapStrategy {
     constructor() {
         this.name = "ProxyVaultSwap";
     }
-    match(edges, userTokenAccounts, userWallet, opts) {
+    match(edges, userTokenAccounts, userWallets, opts) {
         const debug = opts?.debug ?? true;
         const log = opts?.log ?? (() => { });
         const dbg = (...a) => debug && log("[ProxyVaultSwap]", ...a);
@@ -56,14 +56,16 @@ export class ProxyVaultSwapStrategy {
                 soldAmount: tokenOut.amount,
                 boughtMint: SOL_MINT,
                 boughtAmount: solIn.amount,
-                path: [tokenOut, solIn]
+                path: [tokenOut, solIn],
+                userWallet: tokenOut.authority || ""
             });
             legs.push({
                 soldMint: SOL_MINT,
                 soldAmount: solOut.amount,
                 boughtMint: finalIn.mint,
                 boughtAmount: finalIn.amount,
-                path: [solOut, finalIn]
+                path: [solOut, finalIn],
+                userWallet: tokenOut.authority || ""
             });
         }
         return legs;
