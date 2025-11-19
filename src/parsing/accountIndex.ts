@@ -23,8 +23,11 @@ export function buildAccountIndexSkeleton(
   log("Collected account keys", { count: keys.length });
 
   function addFromTB(tb: any) {
+  
     for (const e of tb ?? []) {
+  
       const addr = keys[e.accountIndex];
+ 
       if (!addr) continue;
       idx.set(addr, {
         mint: e.mint,
@@ -34,6 +37,7 @@ export function buildAccountIndexSkeleton(
      // log("Indexed account from token balance", { addr, mint: e.mint, owner: e.owner });
     }
   }
+
 
   // Step 2 & 3: Enrich from pre/post token balances
   addFromTB(tx?.meta?.preTokenBalances);
@@ -84,7 +88,7 @@ function addFromTokenInitsAndAtaCreates(
 
     // spl-associated-token-account create / createIdempotent
     if (pid === ATA_PROGRAM_ID && (p.type === "create" || p.type === "createIdempotent")) {
-      console.log(p.info?.account);
+    
       const acc = p.info?.account;
       const wallet = p.info?.wallet;
         out.add(acc);
@@ -109,37 +113,56 @@ function addFromTokenInitsAndAtaCreates(
  */
 export function extractUserTokenAccounts(
   tx: any,
-  userWallet: string,
+  userWallets: string[],
   opts?: { debug?: boolean }
 ): Set<string> {
   const { debug = false } = opts ?? {};
-  const log = (...args: any[]) => { if (debug) console.debug("[extractUserTokenAccounts]", ...args); };
+  const log = (...args: any[]) => {
+    if (debug) console.debug("[extractUserTokenAccounts]", ...args);
+  };
 
-  const keys: string[] = (tx?.transaction?.message?.accountKeys ?? []).map((k: any) => to58(k));
+  if (!Array.isArray(userWallets)) {
+    throw new Error("extractUserTokenAccounts: userWallets must be string[]");
+  }
+
+  const keys: string[] =
+    (tx?.transaction?.message?.accountKeys ?? []).map((k: any) => to58(k));
+
   const s = new Set<string>();
 
+  // -------------------------------------------------------
+  // 1) Add accounts from pre/post token balances
+  // -------------------------------------------------------
   const addFromTB = (tb: any) => {
     for (const e of tb ?? []) {
-      if (e.owner === userWallet) {
+      if (userWallets.includes(e.owner)) {
         const addr = keys[e.accountIndex];
         if (addr) {
           s.add(addr);
-          log("Added user-owned account from balances", { addr });
+          log("Added user-owned account from token balance", { addr });
         }
       }
     }
   };
 
-
-  // Step 1: Accounts present in pre/post balances
   addFromTB(tx?.meta?.preTokenBalances);
   addFromTB(tx?.meta?.postTokenBalances);
 
-  // Step 2: Accounts created/initialized in this transaction
-  addFromTokenInitsAndAtaCreates(tx, userWallet, s, { debug });
+  // -------------------------------------------------------
+  // 2) Add ATA / token accounts created in this transaction
+  // -------------------------------------------------------
+  for (const w of userWallets) {
+    addFromTokenInitsAndAtaCreates(tx, w, s, { debug });
+  }
 
-  
-  
+  // -------------------------------------------------------
+  // 3) Add raw user wallet pubkeys as token accounts (WSOL)
+  // -------------------------------------------------------
+  for (const w of userWallets) {
+    s.add(w);
+  }
+
   log("Final user token accounts", { count: s.size });
   return s;
 }
+

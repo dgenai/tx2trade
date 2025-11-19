@@ -15,8 +15,8 @@ export class WalletToWalletTokenTransferStrategy implements LegStrategy {
   match(
     edges: TransferEdge[],
     userTokenAccounts: Set<string>,
-    userWallet: string,
-    opts: {
+ userWallets: string[],
+     opts: {
       debug?: boolean;
       log?: (...args: any[]) => void;
       tags?: Map<number, "fee" | "dust" | "normal" | "tip">;
@@ -39,7 +39,7 @@ export class WalletToWalletTokenTransferStrategy implements LegStrategy {
     // Step 1: collect candidate user-out edges (excluding WSOL)
     const userOuts = edges.filter((e) =>
       tags?.get(e.seq) !== "fee" && tags?.get(e.seq) !== "dust" &&
-      e.authority === userWallet &&
+      userWallets.includes(e.authority ?? "") &&
       userTokenAccounts.has(e.source) &&
       e.mint !== WSOL_MINT &&
       e.amount > 0
@@ -83,8 +83,11 @@ export class WalletToWalletTokenTransferStrategy implements LegStrategy {
         destinations: cluster.map(x => x.destination),
       });
 
+      const userWallet = cluster[0].authority || "";
+
       // Build the outbound leg
       const leg: SwapLeg = {
+        userWallet,
         soldMint: e.mint,
         soldAmount: totalAmount,
         boughtMint: "",

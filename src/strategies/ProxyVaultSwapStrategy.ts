@@ -9,8 +9,8 @@ export class ProxyVaultSwapStrategy {
   match(
     edges: TransferEdge[],
     userTokenAccounts: Set<string>,
-    userWallet: string,
-    opts?: { debug?: boolean; log?: (...a: any[]) => void }
+ userWallets: string[],
+     opts?: { debug?: boolean; log?: (...a: any[]) => void }
   ): SwapLeg[] {
     const debug = opts?.debug ?? true;
     const log = opts?.log ?? (() => {});
@@ -87,7 +87,8 @@ export class ProxyVaultSwapStrategy {
         soldAmount: tokenOut.amount,
         boughtMint: SOL_MINT,
         boughtAmount: solIn.amount,
-        path: [tokenOut, solIn]
+        path: [tokenOut, solIn],
+        userWallet: tokenOut.authority || ""
       });
 
       legs.push({
@@ -95,7 +96,8 @@ export class ProxyVaultSwapStrategy {
         soldAmount: solOut.amount,
         boughtMint: finalIn.mint,
         boughtAmount: finalIn.amount,
-        path: [solOut, finalIn]
+        path: [solOut, finalIn],
+        userWallet: tokenOut.authority || ""
       });
     }
 

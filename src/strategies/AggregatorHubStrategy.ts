@@ -8,7 +8,7 @@ export class AggregatorHubStrategy implements LegStrategy {
   match(
     edges: TransferEdge[],
     userTokenAccounts: Set<string>,
-    userWallet: string,
+    userWallets: string[],
     opts: {
       windowOutToSolIn?: number;
       windowHubToUserIn?: number;
@@ -37,7 +37,7 @@ export class AggregatorHubStrategy implements LegStrategy {
     const userOuts = edges.filter(
       (e) =>
         userTokenAccounts.has(e.source) &&
-        e.authority === userWallet &&
+        userWallets.includes(e.authority ?? "") &&
         e.mint !== WSOL_MINT
     );
 
@@ -45,11 +45,11 @@ export class AggregatorHubStrategy implements LegStrategy {
     const userIns = edges.filter(
       (e) =>
         userTokenAccounts.has(e.destination) &&
-        e.authority !== userWallet &&
+        !userWallets.includes(e.authority ?? "") &&
         e.mint !== WSOL_MINT
     );
 
-    const hubs = findSolHubsByAuthority(edges, userWallet, { debug });
+    const hubs = findSolHubsByAuthority(edges, userWallets, { debug });
 
     dbg("Candidates collected", {
       totalEdges: edges.length,
@@ -156,6 +156,7 @@ export class AggregatorHubStrategy implements LegStrategy {
       legs.push({
         soldMint: out.mint,
         soldAmount: out.amount,
+        userWallet: out.authority || "",
         boughtMint: WSOL_MINT,
         boughtAmount: solInSum,
         path: solInEdges.concat([out]),
@@ -176,6 +177,7 @@ export class AggregatorHubStrategy implements LegStrategy {
           boughtMint: inn.mint,
           boughtAmount: inn.amount,
           path: [...solOuts, inn],
+          userWallet: out.authority || "",
         });
         dbg("Leg created (SOL→token)", {
           solOutSeqs: solOuts.map((s) => s.seq),

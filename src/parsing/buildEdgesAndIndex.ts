@@ -61,6 +61,7 @@ export function buildEdgesAndIndex(
 
   // Step 4: finalize
   edges.sort((a, b) => a.seq - b.seq);
+
   log("Completed", { edges: edges.length, accounts: accountIndex.size });
   return { edges, accountIndex };
 }

@@ -63,7 +63,8 @@ export interface SwapLeg {
   boughtAmount: number;
   path: TransferEdge[];
   targetWallet?: string,
-
+  userWallet: string,
+  
   // Decomposed SOL flows (in SOL units)
   soldCore?: number;       // Core SOL outflow (bonding curve only)
   routerFees?: number;     // Router/aggregator fees

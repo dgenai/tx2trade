@@ -150,7 +150,7 @@ async function main() {
 
   // Copy JSON result → clipboard
   try {
-    clipboardy.writeSync(JSON.stringify(enriched, null, 2));
+   
   } catch {
     console.warn("⚠️ Could not write to clipboard.");
   }

@@ -4,7 +4,7 @@ import { BinanceKlinesService } from "./services/BinanceKlinesService.js";
 
 import { transactionToSwapLegs_SOLBridge } from "./core/transactionToSwapLegs.js";
 import { legsToTradeActions } from "./core/actions.js";
-import { inferUserWallet } from "./core/inferUserWallet.js";
+import { inferUserWallets } from "./core/inferUserWallet.js";
 
 export { SolanaRpcClient } from "./services/SolanaRpcClient.js";
 
@@ -225,9 +225,9 @@ export async function tx2trade(input: Tx2TradeInput) {
     }
 
     try {
-      const wallet = inferUserWallet(tx);
+      const wallets = inferUserWallets(tx);
 
-      const legs = transactionToSwapLegs_SOLBridge(sig, tx, wallet, {
+      const legs = transactionToSwapLegs_SOLBridge(sig, tx, wallets, {
         windowTotalFromOut,
         requireAuthorityUserForOut,
         debug,
@@ -235,7 +235,7 @@ export async function tx2trade(input: Tx2TradeInput) {
 
       const actions = legsToTradeActions(legs, {
         txHash: sig,
-        wallet,
+        wallets,
         blockTime: tx.blockTime,
         candles,
       });

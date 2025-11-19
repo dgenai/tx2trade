@@ -7,14 +7,14 @@ export class AuthorityOnlyStrategy implements LegStrategy {
     match(
       edges: TransferEdge[],
       userTokenAccounts: Set<string>,  
-      userWallet: string,
+      userWallets: string[],
       opts: { windowTotalFromOut?: number; debug?: boolean; log?: (...args: any[]) => void }
     ): SwapLeg[] {
       const { windowTotalFromOut = 400, debug = opts.debug || false, log = () => {} } = opts ?? {};
       const dbg = (...a:any[]) => { if (debug) log("[AuthorityOnly]", ...a); };
   
       const userSolOuts = edges.filter(
-        (e) => e.mint === WSOL_MINT && e.authority === userWallet
+        (e) => e.mint === WSOL_MINT && userWallets.includes(e.authority ?? "")
       );
   
       const tokenIns = edges.filter(
@@ -37,6 +37,7 @@ export class AuthorityOnlyStrategy implements LegStrategy {
         legs.push({
           soldMint: WSOL_MINT,
           soldAmount: bestOut.amount,
+          userWallet: bestOut.authority || "",
           boughtMint: inn.mint,
           boughtAmount: inn.amount,
           path: [bestOut, inn],

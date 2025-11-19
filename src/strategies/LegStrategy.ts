@@ -6,7 +6,7 @@ export interface LegStrategy {
     match(
         edges: TransferEdge[],
         userTokenAccounts: Set<string>,
-        userWallet: string,
+        userWallet: string[],
         opts: any
     ): SwapLeg[];
 }

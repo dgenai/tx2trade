@@ -4,7 +4,7 @@ export type SolHub = { account: string; inEdges: TransferEdge[]; outEdges: Trans
 
 export function findSolHubsByAuthority(
   edges: TransferEdge[],
-  userWallet: string,
+  userWallets: string[],
   opts?: { debug?: boolean; log?: (...args: any[]) => void }
 ): Map<string, SolHub> {
   const { debug = false } = opts ?? {};
@@ -14,7 +14,7 @@ export function findSolHubsByAuthority(
 
   for (const e of edges) {
     if (e.mint !== WSOL_MINT) continue;
-    if (!e.authority || e.authority === userWallet) continue; // aggregator/MM only
+    if (!e.authority || userWallets.includes(e.authority ?? "")) continue; // aggregator/MM only
 
     log("Processing edge", e);
 

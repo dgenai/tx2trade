@@ -7,8 +7,9 @@ export class WsolToTokenStrategy implements LegStrategy {
   match(
     edges: TransferEdge[],
     userTokenAccounts: Set<string>,
-    userWallet: string,
-    opts: {
+
+ userWallets: string[],
+     opts: {
       windowTotalFromOut?: number;  // max seq gap (before IN)
       windowSolAfterIn?: number;    // max seq gap (after IN)
       windowAroundIn?: number;      // NEW: symmetric window around IN
@@ -28,6 +29,7 @@ export class WsolToTokenStrategy implements LegStrategy {
       minLamportsToSum = 50_000,
     } = opts ?? {};
 
+   
     // Internal debug logger
     const dbg = (...a: any[]) => { if (debug) log(`[${this.name}]`, ...a); };
     // Convert SOL to lamports (1e9 multiplier, rounded)
@@ -35,14 +37,15 @@ export class WsolToTokenStrategy implements LegStrategy {
 
     // Candidate SOL outflows from user wallet
     const userSolOuts = edges.filter(
-      (e) => e.mint === WSOL_MINT && e.authority === userWallet
+      (e) => e.mint === WSOL_MINT && (userWallets.includes(e.authority ?? "") || userTokenAccounts.has(e.source))
     );
 
+    console.log(userTokenAccounts);
+console.log(edges);
     // Candidate token inflows into user-owned accounts (authority ≠ userWallet to exclude self-transfers)
     const userTokenIns = edges.filter(
-      (e) => e.mint !== WSOL_MINT && userTokenAccounts.has(e.destination) && e.authority !== userWallet
+      (e) => e.mint !== WSOL_MINT && userTokenAccounts.has(e.destination) && !userWallets.includes(e.authority ?? "")
     );
-
     if (!userSolOuts.length || !userTokenIns.length) return [];
 
     const legs: SwapLeg[] = [];
@@ -100,8 +103,11 @@ export class WsolToTokenStrategy implements LegStrategy {
       // Aggregate SOL outflow
       const soldAmount = setForSum.reduce((acc, e) => acc + e.amount, 0);
 
+      const userWallet = setForSum[0].authority || "";
+      
       // Build the swap leg
       legs.push({
+        userWallet,
         soldMint: WSOL_MINT,
         soldAmount,
         boughtMint: inn.mint,
