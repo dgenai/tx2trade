@@ -50,7 +50,8 @@ export class SystemVisitor {
                 authority: source,
                 programId: ix?.programId,
                 depth: ctx.depth,
-                decimals: 9
+                decimals: 9,
+                ixIndex: ctx.currentIxIndex
             });
             if (ctx.debug) {
                 log("[SystemVisitor] transfer", {

@@ -106,7 +106,7 @@ export function inferUserWallets(tx: any): string[] {
   }
 
   // -----------------------------
-  // 1. Signers  (source de vérité)
+  // 1. Signers
   // -----------------------------
   const signers = new Set<string>();
   for (const k of accountKeys) {
@@ -118,7 +118,7 @@ export function inferUserWallets(tx: any): string[] {
   }
 
   // -----------------------------
-  // 2. Owners  (mais uniquement s'ils sont signers)
+  // 2. Owners
   // -----------------------------
   const addOwner = (tb: any[]) => {
     for (const e of tb ?? []) {

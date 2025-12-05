@@ -41,6 +41,7 @@ export interface TransferEdge {
     authority?: string;
     programId?: string;
     depth?: number;
+    ixIndex: number;
 }
 /**
  * Swap leg.

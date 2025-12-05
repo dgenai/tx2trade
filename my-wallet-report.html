@@ -159,9 +159,9 @@
     <header>
       <h1>Solana Trades Report</h1>
       <div class="cards">
-        <div class="card"><div class="kpi">Total Transactions <span class="v">0</span></div></div>
-        <div class="card"><div class="kpi">Total Actions <span class="v">0</span></div></div>
-        <div class="card"><div class="kpi">By Type <span class="v">—</span></div></div>
+        <div class="card"><div class="kpi">Total Transactions <span class="v">1</span></div></div>
+        <div class="card"><div class="kpi">Total Actions <span class="v">1</span></div></div>
+        <div class="card"><div class="kpi">By Type <span class="v"><span class="chip">BUY: 1</span></span></div></div>
       </div>
     </header>
 
@@ -191,12 +191,46 @@
       </tr>
       </thead>
         <tbody>
-          <tr><td colspan="8">No actions.</td></tr>
+          
+        <tr>
+          <td class="when">05/12/2025 16:38:52</td>
+          <td class="center">
+            
+            <a href="https://solscan.io/tx/7759GrvgttUcRukhC2UvYEpYhcUWGJrP3W1et5N9ndZ78FbkFPfAWL5XpyduQBy5guL3GhgjydEWDHU3pCS1U9u" target="_blank" rel="noopener noreferrer" class="icon-link" title="Open in Solscan" aria-label="Open in Solscan">
+              <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true">
+                <defs>
+                  <linearGradient id="g" x1="0" x2="1" y1="0" y2="1">
+                    <stop offset="0" stop-color="#7f5af0"/>
+                    <stop offset="1" stop-color="#2ac3de"/>
+                  </linearGradient>
+                </defs>
+                <path d="M12 2l7.8 4.5v10.9L12 22 4.2 17.4V6.5L12 2z" fill="url(#g)" opacity=".25"/>
+                <path d="M7 9h10a1 1 0 1 1 0 2H7a1 1 0 1 1 0-2zm0 4h10a1 1 0 1 1 0 2H7a1 1 0 1 1 0-2z" fill="url(#g)"/>
+              </svg>
+            </a>
+          </td>
+          <td class="wallet">
+            <span class="mono">EnNR…spJM</span>
+            <button class="copy" data-copy="EnNRaBR29zQ2DNRmekd4u627cFmqxx3sYi88LLHyspJM" title="Copy address" aria-label="Copy address">
+              <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M16 1H8a2 2 0 0 0-2 2v2h2V3h8v8h2V3a2 2 0 0 0-2-2zm-3 6H5a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2zm0 12H5V9h8v10z"/></svg>
+            </button>
+          </td>
+          <td class="types">
+            <span class="pill buy">BUY</span>
+          </td>
+          <td class="num">3 387 107,457396</td>
+          <td><span class="token"><span class="token-name">WOOOOO</span><button class="copy token-copy" data-copy="334wPKiqe28YahNDNWGFNJj8n2UXdYGJFer6LMAE4M7D" title="Copier" aria-label="Copier">
+             <svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M16 1H8a2 2 0 0 0-2 2v2h2V3h8v8h2V3a2 2 0 0 0-2-2zm-3 6H5a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2zm0 12H5V9h8v10z"/></svg>
+           </button></span></td>
+          <td class="num">0,000004</td>
+          <td class="num">12,9352</td>
+        </tr>
+      
         </tbody>
       </table>
     </div>
 
-    <footer>Generated at 19/11/2025 18:53:39</footer>
+    <footer>Generated at 05/12/2025 16:39:19</footer>
   </div>
 
 
@@ -209,7 +243,7 @@
   <script>
 (function() {
 
-const graphData = {"nodes":[],"links":[]};
+const graphData = {"nodes":[{"id":"So11111111111111111111111111111111111111112","label":"SOL","symbol":"SOL","name":"Solana","totalCount":1,"buyCount":0,"sellCount":0,"transferCount":0,"icon":"https://coin-images.coingecko.com/coins/images/21629/large/solana.jpg?1696520989"},{"id":"334wPKiqe28YahNDNWGFNJj8n2UXdYGJFer6LMAE4M7D","label":"WOOOOO","symbol":"WOOOOO","name":"BABYYYYY","totalCount":1,"buyCount":1,"sellCount":0,"transferCount":0,"icon":"https://assets.geckoterminal.com/23cl5i2jdwc5fyolmu61bxqcmg6w"}],"links":[{"source":"So11111111111111111111111111111111111111112","target":"334wPKiqe28YahNDNWGFNJj8n2UXdYGJFer6LMAE4M7D","type":"BUY","count":1,"totalSoldAmount":0.094999999,"totalBoughtAmount":3387107.457396}]};
 
   const container = document.getElementById('trade-graph');
   if (!container || !graphData || !Array.isArray(graphData.nodes) || graphData.nodes.length === 0) {

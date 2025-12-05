@@ -1,147 +1,213 @@
-import { WSOL_MINT } from "../types.js";
-import { findSolHubsByAuthority } from "../matching/utils.js";
+import { WSOL_MINT } from "../types.js"; // or "../constants.js" depending on your project
 export class AggregatorHubStrategy {
     constructor() {
         this.name = "AggregatorHub";
     }
     match(edges, userTokenAccounts, userWallets, opts) {
-        const { windowOutToSolIn = 120, windowHubToUserIn = 120, windowTotalFromOut = 400, debug = opts.debug || false, log = (..._args) => { }, tags, } = opts ?? {};
-        const dbg = (...args) => {
-            if (debug)
-                log("[AggregatorHub]", ...args);
-        };
-        const legs = [];
-        // OUTs: user → hub (non-WSOL)
-        const userOuts = edges.filter((e) => userTokenAccounts.has(e.source) &&
-            userWallets.includes(e.authority ?? "") &&
-            e.mint !== WSOL_MINT);
-        // INs: hub → user (non-WSOL, authority ≠ user)
-        const userIns = edges.filter((e) => userTokenAccounts.has(e.destination) &&
-            !userWallets.includes(e.authority ?? "") &&
-            e.mint !== WSOL_MINT);
-        const hubs = findSolHubsByAuthority(edges, userWallets, { debug });
-        dbg("Candidates collected", {
-            totalEdges: edges.length,
-            userOuts: userOuts.length,
-            userIns: userIns.length,
-            hubs: hubs.size,
-        });
-        if (!userOuts.length || !hubs.size)
+        const debug = opts?.debug ?? false;
+        const log = opts?.log ?? (() => { });
+        const dbg = (...msg) => debug && log("[AggregatorHub]", ...msg);
+        if (!edges.length)
             return [];
-        for (const out of userOuts) {
-            dbg("Processing user OUT", {
-                seq: out.seq,
-                source: out.source,
-                mint: out.mint,
-                amount: out.amount,
-            });
-            // Step 1: find SOL IN candidates after the user out (choose the earliest)
-            const solInCandidates = [];
-            for (const [hubAcc, h] of hubs) {
-                const solIn = h.inEdges.find((e) => e.seq > out.seq && e.seq - out.seq <= windowOutToSolIn);
-                if (solIn)
-                    solInCandidates.push({ hub: hubAcc, solIn });
+        const sorted = [...edges].sort((a, b) => a.seq - b.seq);
+        const isUser = (addr) => !!addr && (userWallets.includes(addr) || userTokenAccounts.has(addr));
+        const MIN = 1e-12;
+        const flows = new Map();
+        const reg = (mint) => {
+            if (!flows.has(mint))
+                flows.set(mint, { in: 0, out: 0 });
+            return flows.get(mint);
+        };
+        for (const e of sorted) {
+            const srcU = isUser(e.source);
+            const dstU = isUser(e.destination);
+            if (!srcU && !dstU)
+                continue; // ignore pure noise/router edges
+            const f = reg(e.mint);
+            if (srcU && !dstU) {
+                // user -> pool
+                f.out += e.amount;
             }
-            dbg("SOL IN candidates", solInCandidates.map((c) => ({
-                hub: c.hub,
-                seq: c.solIn.seq,
-                amount: c.solIn.amount,
-            })));
-            if (!solInCandidates.length)
-                continue;
-            solInCandidates.sort((a, b) => (a.solIn.seq - out.seq) - (b.solIn.seq - out.seq));
-            const { hub } = solInCandidates[0];
-            const h = hubs.get(hub);
-            // Step 2: find user IN candidates within total window
-            const candidatesUserIn = userIns.filter((inn) => inn.seq > out.seq &&
-                inn.seq - out.seq <= windowTotalFromOut &&
-                inn.mint !== out.mint);
-            dbg("User IN candidates", candidatesUserIn.map((i) => ({
-                seq: i.seq,
-                mint: i.mint,
-                amount: i.amount,
-            })));
-            // Build pairs: each inn with ALL hub SOL outs around it (drop dust)
-            const allPairs = [];
-            for (const inn of candidatesUserIn) {
-                let around = h.outEdges.filter((e) => Math.abs(e.seq - inn.seq) <= windowHubToUserIn);
-                if (tags)
-                    around = around.filter((e) => tags.get(e.seq) !== "dust");
-                if (!around.length)
-                    continue;
-                allPairs.push({ inn, solOuts: around });
-            }
-            dbg("All pairs SOL→token", allPairs.map((p) => ({
-                solOutSeqs: p.solOuts.map((s) => s.seq),
-                solOutAmtSum: p.solOuts.reduce((a, s) => a + s.amount, 0),
-                innSeq: p.inn.seq,
-                innAmt: p.inn.amount,
-                innMint: p.inn.mint,
-            })));
-            // Step 3: determine upper bound for summing SOL IN (token→WSOL)
-            let solUpperSeq = undefined;
-            if (allPairs.length) {
-                solUpperSeq = Math.max(...allPairs.flatMap((p) => p.solOuts.map((s) => s.seq)));
-            }
-            else {
-                const firstSolOutAfterOut = h.outEdges.find((e) => e.seq > out.seq);
-                if (firstSolOutAfterOut)
-                    solUpperSeq = firstSolOutAfterOut.seq;
-            }
-            dbg("SOL upper seq determined", { solUpperSeq });
-            // Step 4: leg #1 (token → WSOL)
-            const inRange = (e) => e.seq > out.seq &&
-                (solUpperSeq !== undefined
-                    ? e.seq <= solUpperSeq
-                    : e.seq - out.seq <= windowOutToSolIn);
-            let solInEdges = h.inEdges.filter(inRange);
-            if (tags)
-                solInEdges = solInEdges.filter((e) => tags.get(e.seq) !== "dust");
-            const solInSum = solInEdges.reduce((acc, e) => acc + e.amount, 0);
-            legs.push({
-                soldMint: out.mint,
-                soldAmount: out.amount,
-                userWallet: out.authority || "",
-                boughtMint: WSOL_MINT,
-                boughtAmount: solInSum,
-                path: solInEdges.concat([out]),
-            });
-            dbg("Leg created (token→SOL)", {
-                soldMint: out.mint,
-                soldAmount: out.amount,
-                boughtAmount: solInSum,
-            });
-            // Step 5: legs #2 (WSOL → token) for each pair (sum all solOuts)
-            for (const { inn, solOuts } of allPairs) {
-                const soldAmount = solOuts.reduce((acc, e) => acc + e.amount, 0);
-                legs.push({
-                    soldMint: WSOL_MINT,
-                    soldAmount,
-                    boughtMint: inn.mint,
-                    boughtAmount: inn.amount,
-                    path: [...solOuts, inn],
-                    userWallet: out.authority || "",
-                });
-                dbg("Leg created (SOL→token)", {
-                    solOutSeqs: solOuts.map((s) => s.seq),
-                    solAmount: soldAmount,
-                    boughtMint: inn.mint,
-                    boughtAmount: inn.amount,
-                    innSeq: inn.seq,
-                });
+            else if (!srcU && dstU) {
+                // pool -> user
+                f.in += e.amount;
             }
         }
-        // Deduplicate
-        const uniq = new Map();
-        for (const l of legs) {
-            const k = `${l.soldMint}|${l.boughtMint}|${l.path
-                .map((p) => p.seq)
-                .join("-")}`;
-            if (!uniq.has(k))
-                uniq.set(k, l);
+        const mintStats = [...flows.entries()]
+            .map(([mint, f]) => ({ mint, ...f, net: f.in - f.out }))
+            .filter(x => x.in > MIN || x.out > MIN);
+        dbg("mintStats", mintStats);
+        if (!mintStats.length)
+            return [];
+        // Track which mints appear anywhere in the edges (router + user)
+        const allMintsInEdges = new Set(sorted.map(e => e.mint));
+        const userWallet = userWallets[0] ?? "";
+        // Helper: is there a user-facing WSOL flow?
+        const wsolUserFlow = mintStats.find(m => m.mint === WSOL_MINT);
+        // Helper: estimate a WSOL pivot amount *from raw edges only*.
+        // Used only in the trivial case (1 sold / 1 bought / no pivot)
+        // when WSOL does not appear as a user mint.
+        const estimateSolPivotFromEdges = () => {
+            if (!allMintsInEdges.has(WSOL_MINT))
+                return 0;
+            const solEdges = sorted.filter(e => e.mint === WSOL_MINT);
+            if (!solEdges.length)
+                return 0;
+            const DUST = 1e-9;
+            const filtered = solEdges.filter(e => Number(e.amount ?? 0) > DUST);
+            if (!filtered.length)
+                return 0;
+            let max = 0;
+            for (const e of filtered) {
+                const v = Number(e.amount ?? 0);
+                if (v > max)
+                    max = v;
+            }
+            return max;
+        };
+        // ------------------------------------------------------------
+        // 2) Identify sold / bought / pivot mints
+        //
+        // - sold  : net out (user gives more than receives)
+        // - bought: net in  (user receives more than gives)
+        // - pivot : roughly in == out (intermediate asset for multi-leg)
+        // ------------------------------------------------------------
+        let sold = mintStats.filter(m => m.out > m.in + MIN);
+        let bought = mintStats.filter(m => m.in > m.out + MIN);
+        let pivot = mintStats.filter(m => Math.abs(m.in - m.out) <= MIN &&
+            m.in > MIN &&
+            m.out > MIN);
+        dbg("sold", sold, "bought", bought, "pivot", pivot);
+        // ------------------------------------------------------------
+        // 2.a Simple case: 1 sold, 1 bought
+        //
+        // Normally this is a single-leg trade: user sells one mint and
+        // buys another.
+        //
+        // PATCH: if there is internal WSOL activity (in edges) but no
+        // WSOL user-flow (no WSOL mint in mintStats), we treat this as
+        // a TOKEN → WSOL → TOKEN trade and return TWO legs:
+        //   legSell: TOKEN_sold → WSOL
+        //   legBuy : WSOL      → TOKEN_bought
+        //
+        // This is only applied in this trivial case to avoid breaking
+        // more complex routes like token → SOL → pivot token → SOL → token.
+        // ------------------------------------------------------------
+        if (sold.length === 1 && bought.length === 1) {
+            const s = sold[0];
+            const b = bought[0];
+            const hasWSOLInEdges = allMintsInEdges.has(WSOL_MINT);
+            const hasWSOLUserFlow = !!wsolUserFlow;
+            // Only try WSOL decomposition if:
+            //  - WSOL appears in raw edges, AND
+            //  - WSOL is NOT already a user-facing mint (no mintStats entry).
+            if (hasWSOLInEdges && !hasWSOLUserFlow) {
+                const solPivot = estimateSolPivotFromEdges();
+                const MIN_SOL_PIVOT = 1e-7;
+                if (solPivot > MIN_SOL_PIVOT) {
+                    const legSell = {
+                        soldMint: s.mint,
+                        soldAmount: s.out,
+                        boughtMint: WSOL_MINT,
+                        boughtAmount: solPivot,
+                        userWallet,
+                        path: sorted,
+                    };
+                    const legBuy = {
+                        soldMint: WSOL_MINT,
+                        soldAmount: solPivot,
+                        boughtMint: b.mint,
+                        boughtAmount: b.in,
+                        userWallet,
+                        path: sorted,
+                    };
+                    dbg("WSOL pivot decomposition (TOKEN→WSOL→TOKEN)", {
+                        legSell,
+                        legBuy,
+                    });
+                    // Two legs:
+                    // - legSell -> will map to a SELL action (token -> SOL)
+                    // - legBuy  -> will map to a BUY  action (SOL  -> token)
+                    return [legSell, legBuy];
+                }
+            }
+            // Default: single TOKEN → TOKEN leg (original behavior)
+            return [
+                {
+                    soldMint: s.mint,
+                    soldAmount: s.out,
+                    boughtMint: b.mint,
+                    boughtAmount: b.in,
+                    userWallet,
+                    path: sorted,
+                },
+            ];
         }
-        dbg("AggregatorHubStrategy result", { totalLegs: uniq.size });
-        return [...uniq.values()];
+        // ------------------------------------------------------------
+        // 3) Double-leg case with pivot (3 mints: sold, pivot, bought)
+        //
+        // Typical pattern:
+        //   token A -> pivot (e.g. SOL or a stable)
+        //   pivot   -> token B
+        //
+        // Here we split into two SwapLegs:
+        //   leg1: A -> pivot
+        //   leg2: pivot -> B
+        // ------------------------------------------------------------
+        if (sold.length === 1 &&
+            bought.length === 1 &&
+            pivot.length === 1) {
+            const s = sold[0];
+            const b = bought[0];
+            const p = pivot[0];
+            const mid = Math.min(p.in, p.out);
+            const leg1 = {
+                soldMint: s.mint,
+                soldAmount: s.out,
+                boughtMint: p.mint,
+                boughtAmount: mid,
+                userWallet,
+                path: sorted,
+            };
+            const leg2 = {
+                soldMint: p.mint,
+                soldAmount: mid,
+                boughtMint: b.mint,
+                boughtAmount: b.in,
+                userWallet,
+                path: sorted,
+            };
+            return [leg1, leg2];
+        }
+        // ------------------------------------------------------------
+        // 4) Fallback: pick the strongest sold / bought flows
+        //
+        // This is used when we don't have a clear pivot, but we still
+        // see at least one sold and one bought mint. We take the biggest
+        // out-flow as "sold" and the biggest in-flow as "bought".
+        //
+        // Example: multiple mints touched, noisy routing, etc.
+        // ------------------------------------------------------------
+        if (sold.length >= 1 && bought.length >= 1) {
+            sold.sort((a, b) => b.out - a.out);
+            bought.sort((a, b) => b.in - a.in);
+            const s = sold[0];
+            const b = bought[0];
+            return [
+                {
+                    soldMint: s.mint,
+                    soldAmount: s.out,
+                    boughtMint: b.mint,
+                    boughtAmount: b.in,
+                    userWallet,
+                    path: sorted,
+                },
+            ];
+        }
+        // ------------------------------------------------------------
+        // No meaningful trade detected
+        // ------------------------------------------------------------
+        return [];
     }
 }
 //# sourceMappingURL=AggregatorHubStrategy.js.map

@@ -12,7 +12,7 @@ export class WsolToTokenStrategy implements LegStrategy {
      opts: {
       windowTotalFromOut?: number;  // max seq gap (before IN)
       windowSolAfterIn?: number;    // max seq gap (after IN)
-      windowAroundIn?: number;      // NEW: symmetric window around IN
+      windowAroundIn?: number;      // symmetric window around IN
       debug?: boolean;
       log?: (...args: any[]) => void;
       tags?: Map<number, "fee" | "dust" | "normal">;
@@ -40,9 +40,7 @@ export class WsolToTokenStrategy implements LegStrategy {
       (e) => e.mint === WSOL_MINT && (userWallets.includes(e.authority ?? "") || userTokenAccounts.has(e.source))
     );
 
-    console.log(userTokenAccounts);
-console.log(edges);
-    // Candidate token inflows into user-owned accounts (authority ≠ userWallet to exclude self-transfers)
+    // Candidate token inflows into user-owned accounts 
     const userTokenIns = edges.filter(
       (e) => e.mint !== WSOL_MINT && userTokenAccounts.has(e.destination) && !userWallets.includes(e.authority ?? "")
     );

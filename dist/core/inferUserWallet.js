@@ -105,7 +105,7 @@ export function inferUserWallets(tx) {
         return String(k.pubkey ?? "");
     }
     // -----------------------------
-    // 1. Signers  (source de vérité)
+    // 1. Signers
     // -----------------------------
     const signers = new Set();
     for (const k of accountKeys) {
@@ -116,7 +116,7 @@ export function inferUserWallets(tx) {
         }
     }
     // -----------------------------
-    // 2. Owners  (mais uniquement s'ils sont signers)
+    // 2. Owners
     // -----------------------------
     const addOwner = (tb) => {
         for (const e of tb ?? []) {

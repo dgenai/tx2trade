@@ -55,8 +55,9 @@ export class TokenToWsolStrategy {
         for (const inn of ins) {
             // Try to resolve the receiving wallet for this WSOL inflow:
             // - if destination is a wallet address, use it
-            // - if destination is only a token account, we would need an ATA→wallet map (not available here)
-            const receiverWallet = userWallets.find((w) => w === inn.destination) ?? undefined;
+            // - if destination is only a token account, we would need an ATA→wallet map
+            const receiverWallet = userWallets.find((w) => w === inn.destination) ??
+                (userTokenAccounts.has(inn.destination ?? "") ? inn.destination ?? "" : "");
             // Without a receiver wallet, we cannot safely match in multi-wallet mode
             if (!receiverWallet) {
                 dbg("Skip IN (cannot resolve receiver wallet)", {
@@ -68,9 +69,13 @@ export class TokenToWsolStrategy {
             let windowOuts;
             if (typeof windowAroundIn === "number") {
                 // Symmetric window around the WSOL IN
-                windowOuts = outs.filter((o) => !usedOut.has(o.seq) &&
-                    Math.abs(o.seq - inn.seq) <= windowAroundIn &&
-                    o.authority === receiverWallet);
+                windowOuts = outs.filter((o) => {
+                    if (usedOut.has(o.seq))
+                        return false;
+                    if (Math.abs(o.seq - inn.seq) > windowAroundIn)
+                        return false;
+                    return true;
+                });
             }
             else {
                 // Look-back window only

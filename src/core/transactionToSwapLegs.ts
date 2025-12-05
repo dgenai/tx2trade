@@ -11,13 +11,11 @@ import { WalletToWalletTokenTransferStrategy } from "../strategies/WalletToWalle
 import { ProxyVaultSwapStrategy } from "../strategies/ProxyVaultSwapStrategy.js";
 
 import { WSOL_DECIMALS, WSOL_MINT } from "../constants.js";
-
 import { pushUserSolDeltaEdge } from "../parsing/solDeltas.js";
-
 
 type Options = {
   // Tolerance windows used by strategies to reconcile flows and amounts.
-  // Strategy implementations decide how to use these windows.
+  // Concrete usage is strategy-specific.
   windowOutToSolIn?: number;
   windowHubToUserIn?: number;
   windowTotalFromOut?: number;
@@ -29,24 +27,26 @@ type Options = {
   // Enable verbose, structured logs for debugging.
   debug?: boolean;
 
-  // --- new (optional) ---
+  // --- additional optional tuning knobs ---
+
   // Absolute anti-dust threshold for WSOL in lamports.
   minWsolLamports?: number;
-  // Relative anti-dust threshold per mint (e.g. 0.005 = 0.5% of the largest flow for that mint).
+
+  // Relative anti-dust threshold per mint
+  // (e.g. 0.005 = 0.5% of the largest flow for that mint).
   dustRelPct?: number;
-  // Safety cap to stop iterating passes.
+
+  // Safety cap to stop iterating passes (not used in the current implementation,
+  // but kept for future multi-pass engines).
   maxPasses?: number;
 
-  windowAroundIn?: number; 
+  // Sequence window used around "in" edges when correlating flows.
+  windowAroundIn?: number;
 };
 
-// Simple tag for fees/dust filtering
 type EdgeTag = "fee" | "dust" | "normal" | "tip";
 
-// Local fallback for WSOL mint (import from your types if available)
-
-
-// Convert an edge amount to lamports (only meaningful for WSOL)
+// Convert an edge amount to lamports (only meaningful for WSOL).
 function toLamports(e: TransferEdge): number {
   return e.mint === WSOL_MINT ? Math.round(e.amount * 10 ** WSOL_DECIMALS) : 0;
 }
@@ -55,10 +55,13 @@ function sumSol(edges: TransferEdge[]) {
   return edges.reduce((acc, e) => acc + e.amount, 0); // already in SOL units
 }
 
-
-
-// EdgeTag = "fee" | "dust" | "normal" | "tip"
-
+/**
+ * Classify edges as fee / dust / normal / tip.
+ *
+ * This is a combined absolute + relative dust filter, and then
+ * a second pass that tries to identify fee/tip patterns per user wallet
+ * based on WSOL flows, checked/non-checked transfers, and small sinks.
+ */
 export function tagEdgesForFeesDust(
   edges: TransferEdge[],
   userWallets: string[],
@@ -72,7 +75,7 @@ export function tagEdgesForFeesDust(
   const maxByMint = new Map<string, number>();
 
   // -----------------------------------------
-  // 1) Compute max flow per mint (same logic)
+  // 1) Compute max flow per mint
   // -----------------------------------------
   for (const e of edges) {
     maxByMint.set(e.mint, Math.max(maxByMint.get(e.mint) ?? 0, e.amount));
@@ -82,7 +85,8 @@ export function tagEdgesForFeesDust(
   // 2) Initial dust classification
   // -----------------------------------------
   for (const e of edges) {
-    const isDustAbsWsol = e.mint === WSOL_MINT && toLamports(e) < minWsolLamports;
+    const isDustAbsWsol =
+      e.mint === WSOL_MINT && toLamports(e) < minWsolLamports;
     const maxMint = maxByMint.get(e.mint) ?? 0;
     const isDustRel = maxMint > 0 && e.amount < maxMint * dustRelPct;
 
@@ -90,17 +94,14 @@ export function tagEdgesForFeesDust(
   }
 
   // ============================================================
-  // 3) PER-WALLET fee/tip detection (this fixes your logic)
+  // 3) Per-wallet fee/tip detection
   // ============================================================
-
   for (const userWallet of userWallets) {
-
-    // --- 3a: WSOL debits signed by THIS wallet ---
+    // --- 3a: WSOL debits signed by THIS wallet (clustered fee pattern) ---
     const wsolUser = edges
       .filter(e => e.mint === WSOL_MINT && e.authority === userWallet)
       .sort((a, b) => a.seq - b.seq);
 
-    // cluster fee pattern
     for (let i = 0; i < wsolUser.length; i++) {
       const a = wsolUser[i];
       const group: TransferEdge[] = [];
@@ -123,20 +124,22 @@ export function tagEdgesForFeesDust(
 
     // --- 3b: Non-checked WSOL → tip/fee classification (per wallet) ---
     const wsolNonChecked = edges
-      .filter((e: any) =>
-        e.mint === WSOL_MINT &&
-        e.authority === userWallet &&
-        e.checked === false
+      .filter(
+        (e: any) =>
+          e.mint === WSOL_MINT &&
+          e.authority === userWallet &&
+          e.checked === false
       )
       .sort((a, b) => a.seq - b.seq);
 
     const hasSignificantCheckedNearby = (baseSeq: number) =>
-      edges.some((e: any) =>
-        e.mint === WSOL_MINT &&
-        e.authority === userWallet &&
-        e.checked === true &&
-        Math.abs(e.seq - baseSeq) <= 60 &&
-        toLamports(e) >= 300_000
+      edges.some(
+        (e: any) =>
+          e.mint === WSOL_MINT &&
+          e.authority === userWallet &&
+          e.checked === true &&
+          Math.abs(e.seq - baseSeq) <= 60 &&
+          toLamports(e) >= 300_000
       );
 
     for (const e of wsolNonChecked) {
@@ -165,6 +168,7 @@ export function tagEdgesForFeesDust(
       );
       if (!outs.length) continue;
 
+      // Core = largest WSOL out in the cluster, the rest are tips/fees.
       let core = outs[0];
       for (const o of outs) {
         if (toLamports(o) > toLamports(core)) core = o;
@@ -217,11 +221,13 @@ export function tagEdgesForFeesDust(
   return tags;
 }
 
-
-
-
 export function attachFeesAndNetsToLegs({
-  tx, legs, edges, tags, userWallets, windowSeq = 200,
+  tx,
+  legs,
+  edges,
+  tags,
+  userWallets,
+  windowSeq = 200,
 }: {
   tx: any;
   legs: SwapLeg[];
@@ -248,6 +254,8 @@ export function attachFeesAndNetsToLegs({
     t?: "fee" | "dust" | "normal" | "tip"
   ) => {
     const depth = (e as any).depth ?? 0;
+    // Depth 0 is typically a direct user-level WSOL debit,
+    // treat it as a "tip" if not explicitly classified.
     if (depth === 0) return "tip";
     return t ?? "normal";
   };
@@ -255,26 +263,50 @@ export function attachFeesAndNetsToLegs({
   for (const leg of legs) {
     if (!leg.path?.length) continue;
 
-    // *** Correction : chaque leg porte son propre userWallet ***
     const userWallet = leg.userWallet;
-    if (!userWallet) continue; // sécurité
+    if (!userWallet) continue;
 
-    const seqs = leg.path.map((p) => p.seq);
+    const seqs = leg.path.map(p => p.seq);
     const minSeq = Math.min(...seqs);
     const maxSeq = Math.max(...seqs);
 
-    const isBuy = leg.soldMint === WSOL_MINT;
-    const isSell = leg.boughtMint === WSOL_MINT;
+    const isBuyExplicit = leg.soldMint === WSOL_MINT; // SOL -> token
+    const isSellExplicit = leg.boughtMint === WSOL_MINT; // token -> SOL
 
-    // WSOL debits signed by *this* user
+    const isUserSolOutEdge = (e: TransferEdge): boolean => {
+      if (e.mint !== WSOL_MINT) return false;
+      if (isSolDelta(e)) return false;
+
+      const auth = String((e as any).authority ?? "");
+      const src = String((e as any).source ?? "");
+      const dst = String((e as any).destination ?? "");
+
+      // 1) Straightforward case: authority is exactly the user wallet.
+      if (auth === userWallet) return true;
+
+      // 2) Authority is another wallet belonging to the same user set.
+      if (userWallets.includes(auth)) return true;
+
+      // 3) Fallback: if the source is related to the user (but destination is not),
+      //    treat this as a user "out" edge.
+      const srcInvolvesUser =
+        src.includes(userWallet) || userWallets.some(w => src.includes(w));
+      const dstInvolvesUser =
+        dst.includes(userWallet) || userWallets.some(w => dst.includes(w));
+
+      if (srcInvolvesUser && !dstInvolvesUser) return true;
+
+      return false;
+    };
+
     const wsolUserOuts = edges.filter(
       (e: TransferEdge) =>
-        e.mint === WSOL_MINT &&
-        e.authority === userWallet &&   // ****** FIX ICI ******/
-        !isSolDelta(e) &&
+        isUserSolOutEdge(e) &&
         e.seq >= minSeq - windowSeq &&
         e.seq <= maxSeq + windowSeq
     );
+
+    const usesSolOut = wsolUserOuts.length > 0;
 
     let core = 0,
       router = 0,
@@ -286,7 +318,12 @@ export function attachFeesAndNetsToLegs({
       tip: [] as { seq: number; amount: number }[],
     };
 
-    if (isBuy) {
+    // -------------------------------------------------------------------
+    // BUY-like legs
+    //  - explicit BUY (soldMint = WSOL)
+    //  - or token↔token legs that still consume user WSOL (usesSolOut)
+    // -------------------------------------------------------------------
+    if (isBuyExplicit || (!isSellExplicit && usesSolOut)) {
       for (const e of wsolUserOuts) {
         const t0 = tags.get(e.seq);
         const t = forceClass(e, t0);
@@ -313,7 +350,11 @@ export function attachFeesAndNetsToLegs({
       leg.soldAllIn = transfersOnly + networkFee || undefined;
     }
 
-    else if (isSell) {
+    // -------------------------------------------------------------------
+    // SELL-like legs
+    //  - explicit token -> SOL (boughtMint = WSOL)
+    // -------------------------------------------------------------------
+    else if (isSellExplicit) {
       for (const e of wsolUserOuts) {
         const t0 = tags.get(e.seq);
         const t = forceClass(e, t0);
@@ -339,13 +380,17 @@ export function attachFeesAndNetsToLegs({
   }
 }
 
-
-
 /**
- * New engine:
- * - multi-pass
- * - no short-circuit (do not return on first match)
- * - consume used edges so subsequent strategies don’t reuse them
+ * Transaction → SwapLegs engine for the "SOLBridge" model.
+ *
+ * Responsibilities:
+ *  - Build token-transfer edges from a parsed transaction
+ *  - Add synthetic WSOL delta edges for user wallets
+ *  - Detect user token accounts
+ *  - Tag edges as fee/dust/normal/tip
+ *  - Run a strategy pipeline (AggregatorHub, ProxyVault, WSOL<->Token, etc.)
+ *    instruction by instruction (ixIndex-based)
+ *  - Attach fees and net amounts to the resulting legs
  */
 export function transactionToSwapLegs_SOLBridge(
   sig: string,
@@ -361,7 +406,7 @@ export function transactionToSwapLegs_SOLBridge(
     requireAuthorityUserForOut,
     minWsolLamports = 100_000,
     dustRelPct = 0.005,
-    maxPasses = 6,
+    maxPasses = 6, // reserved for future multi-pass engines
     windowAroundIn = 200,
   } = opts ?? {};
 
@@ -374,9 +419,18 @@ export function transactionToSwapLegs_SOLBridge(
   }
 
   // -------------------------------------------
-  // 1) Build edges
+  // 1) Build edges and index
   // -------------------------------------------
   const { edges } = buildEdgesAndIndex(tx, { debug });
+
+  // Group edges by ixIndex to run strategies per instruction.
+  const edgesByIx = new Map<number, TransferEdge[]>();
+
+  for (const e of edges) {
+    if (!edgesByIx.has(e.ixIndex)) edgesByIx.set(e.ixIndex, []);
+    edgesByIx.get(e.ixIndex)!.push(e);
+  }
+
   log("Edges built:", { count: edges.length });
 
   // -------------------------------------------
@@ -396,7 +450,6 @@ export function transactionToSwapLegs_SOLBridge(
       userTokenAccounts.add(e.source);
     }
   }
-
   for (const w of userWallets) {
     userTokenAccounts.add(w);
   }
@@ -404,7 +457,7 @@ export function transactionToSwapLegs_SOLBridge(
   log("User token accounts:", { count: userTokenAccounts.size });
 
   // -------------------------------------------
-  // 4) Tag fees/dust using MULTI-WALLET
+  // 4) Tag edges (fee/dust/normal/tip)
   // -------------------------------------------
   const tags = tagEdgesForFeesDust(edges, userWallets, {
     minWsolLamports,
@@ -412,7 +465,7 @@ export function transactionToSwapLegs_SOLBridge(
   });
 
   // -------------------------------------------
-  // 5) Strategy pipeline
+  // 5) Strategy pipeline (single pass per ixIndex)
   // -------------------------------------------
   const pipeline: LegStrategy[] = [
     new AggregatorHubStrategy(),
@@ -421,7 +474,6 @@ export function transactionToSwapLegs_SOLBridge(
     new WsolToTokenStrategy(),
     new TokenToWsolStrategy(),
     new WalletToWalletTokenTransferStrategy(),
-    //new AuthorityOnlyStrategy(),
   ];
 
   const commonOpts = {
@@ -439,37 +491,27 @@ export function transactionToSwapLegs_SOLBridge(
   const allLegs: SwapLeg[] = [];
 
   // -------------------------------------------
-  // 6) Iterative multi-pass
+  // 6) Run strategies once per ixIndex
   // -------------------------------------------
-  let pass = 0;
-  let progress = true;
+  for (const [ixIndex, ixEdges] of edgesByIx.entries()) {
+    log(`--- Executing ixIndex ${ixIndex} with ${ixEdges.length} edges ---`);
 
-  while (progress && pass < maxPasses) {
-    progress = false;
-    pass++;
-    log(`---- PASS ${pass} ----`);
+    const localEdges = ixEdges.slice();
 
     for (const strat of pipeline) {
       const name = strat.constructor?.name ?? "UnknownStrategy";
 
-      let cleanEdges = edges.filter(
-        (e) =>
+      const cleanEdges = localEdges.filter(
+        (e: any) =>
           !used.has(e.seq) &&
           tags.get(e.seq) !== "fee" &&
           tags.get(e.seq) !== "tip"
       );
 
-      if (name === "AuthorityOnly") {
-        cleanEdges = cleanEdges.filter((e) => tags.get(e.seq) !== "dust");
-      }
-
       if (!cleanEdges.length) continue;
 
       log(`Trying strategy: ${name} on ${cleanEdges.length} edges`);
 
-      // -------------------------------------------
-      // STRAT.MATCH — NOW MULTI-WALLET
-      // -------------------------------------------
       const legs =
         strat.match(cleanEdges, userTokenAccounts, userWallets, commonOpts) ??
         [];
@@ -479,14 +521,14 @@ export function transactionToSwapLegs_SOLBridge(
         continue;
       }
 
-      // Accept legs without overlapping edges
       const accepted: SwapLeg[] = [];
+
       for (const leg of legs) {
         const seqs = (leg.path ?? []).map((e: any) => e.seq);
         if (!seqs.length) continue;
-        if (seqs.some((s) => used.has(s))) continue;
+        if (seqs.some(s => used.has(s))) continue;
         accepted.push(leg);
-        seqs.forEach((s) => used.add(s));
+        seqs.forEach(s => used.add(s));
       }
 
       if (!accepted.length) {
@@ -495,16 +537,14 @@ export function transactionToSwapLegs_SOLBridge(
       }
 
       allLegs.push(...accepted);
-      progress = true;
-
-      log(`✔ ${name}: accepted ${accepted.length} leg(s) (total=${allLegs.length})`);
+      log(`✔ ${name}: accepted ${accepted.length} leg(s) for ix ${ixIndex}`);
     }
   }
 
-  console.log(`Done after ${pass} pass(es). Legs total: ${allLegs.length}`);
+  log(`Done. Total legs: ${allLegs.length}`);
 
   // -------------------------------------------
-  // 7) Fees / net computation for MULTI-WALLET
+  // 7) Attach WSOL fees / nets for multi-wallet context
   // -------------------------------------------
   attachFeesAndNetsToLegs({
     tx,
@@ -516,9 +556,7 @@ export function transactionToSwapLegs_SOLBridge(
 
   if (allLegs.length === 0) {
     console.log(`❌ No swap legs detected for this transaction: ${sig}`);
-
   }
 
   return allLegs;
 }
-

@@ -34,9 +34,13 @@ export function buildEdgesAndIndex(
   const ctx: VisitContext = {
     seq: { v: 0 },
     depth: 0,
+    currentIxIndex: 1,
     accountIndex,
     pushEdge: (e) => {
+     
+      // push edge normally
       edges.push(e);
+
       if (opts?.debug) console.debug("[Edge pushed]", e);
     },
     noteAccount: (addr, info) => {

@@ -259,58 +259,109 @@ return filtered;
     return out;
   }
 
-  async fetchAllSignaturesWithPagination(
-    address: string,
-    opts: {
-      total: number;                // total target to collect
-      pageSize?: number;            // max 1000
-      before?: string;
-      until?: string;
-      commitment?: Commitment;
-    }
-  ): Promise<string[]> {
+async fetchAllSignaturesWithPagination(
+  address: string,
+  opts: {
+    total: number;          // total target when no date filter is used
+    pageSize?: number;
+    before?: string;
+    until?: string;
+    commitment?: Commitment;
+    fromDate?: string;      // date 1 (any order vs toDate)
+    toDate?: string;        // date 2 (any order vs fromDate)
+  }
+): Promise<string[]> {
 
-    const totalTarget = Math.max(1, opts.total);
-    const pageSize = Math.min(100, Math.max(1, opts.pageSize ?? Math.min(100, totalTarget)));
-    let before = opts.before;
-    const until = opts.until;
-    const commitment = opts.commitment;
-  
-    const sigs: string[] = [];
-    const seen = new Set<string>();
-  
-    while (sigs.length < totalTarget) {
-      const remaining = totalTarget - sigs.length;
-      const pageCap = Math.min(pageSize, remaining);
-  
-      const page = await this.getSignaturesForAddress(
-        address,
-        pageCap,
-        before,
-        until,
-        commitment ?? "confirmed"
-      );
-  
-      if (page.length === 0) break;
-  
-      for (const s of page) {
-        if (!seen.has(s.signature)) {
-          sigs.push(s.signature);
-          seen.add(s.signature);
-          if (sigs.length >= totalTarget) break;
+  const hasDateFilter = !!(opts.fromDate || opts.toDate);
+
+  const totalTarget = Math.max(1, opts.total);
+  const pageSize = Math.min(
+    1000,
+    Math.max(1, opts.pageSize ?? Math.min(100, totalTarget))
+  );
+
+  let before = opts.before;
+  const until = opts.until;
+  const commitment = opts.commitment ?? "confirmed";
+
+  // Convert dates to UNIX seconds
+  const t1 = opts.fromDate
+    ? Math.floor(new Date(opts.fromDate).getTime() / 1000)
+    : undefined;
+  const t2 = opts.toDate
+    ? Math.floor(new Date(opts.toDate).getTime() / 1000)
+    : undefined;
+
+  // We only use the *lower* bound here to know when to stop.
+  // The exact window [min, max] sera gérée plus tard côté tx.
+  let lowerBoundTs: number | undefined = undefined;
+  if (t1 !== undefined && t2 !== undefined) {
+    lowerBoundTs = Math.min(t1, t2);
+  } else {
+    lowerBoundTs = t1 ?? t2;
+  }
+
+  const sigs: string[] = [];
+  const seen = new Set<string>();
+  let stop = false;
+
+  while (sigs.length < totalTarget && !stop) {
+    const remaining = totalTarget - sigs.length;
+    const pageCap = Math.min(pageSize, remaining);
+
+    const page = await this.getSignaturesForAddress(
+      address,
+      pageCap,
+      before,
+      until,
+      commitment
+    );
+
+    if (page.length === 0) break;
+
+    for (const s of page) {
+      const sig = s.signature;
+      const bt = typeof s.blockTime === "number" ? s.blockTime : undefined;
+
+      // If we have a lower bound and this signature is strictly older,
+      // we can stop pagination entirely (results are newest → oldest).
+      if (hasDateFilter && lowerBoundTs !== undefined && bt !== undefined) {
+        if (bt < lowerBoundTs) {
+          stop = true;
+          break;
         }
       }
-  
-      // Advance pagination anchor
-      const last = page[page.length - 1]?.signature;
-      if (!last || last === before) break; // no progress guard
-      before = last;
-  
-      this.dbg(`↪️  Pagination: collected ${sigs.length}/${totalTarget} (next before=${before})`);
+
+      if (!seen.has(sig)) {
+        sigs.push(sig);
+        seen.add(sig);
+      }
+
+      if (!hasDateFilter && sigs.length >= totalTarget) {
+        break;
+      }
     }
-  
-    return sigs;
+
+    if (!hasDateFilter && sigs.length >= totalTarget) break;
+    if (stop) break;
+
+    const last = page[page.length - 1]?.signature;
+    if (!last || last === before) break;
+    before = last;
+
+    this.dbg(`↪️ Pagination: collected ${sigs.length}/${totalTarget} (next before=${before})`);
   }
+
+  return sigs;
+}
+
+
+
+
+
+
+
+
 
 
   private hasTransfer(tx: any): boolean {

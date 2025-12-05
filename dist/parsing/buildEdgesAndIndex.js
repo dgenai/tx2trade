@@ -25,8 +25,10 @@ export function buildEdgesAndIndex(tx, opts) {
     const ctx = {
         seq: { v: 0 },
         depth: 0,
+        currentIxIndex: 1,
         accountIndex,
         pushEdge: (e) => {
+            // push edge normally
             edges.push(e);
             if (opts?.debug)
                 console.debug("[Edge pushed]", e);

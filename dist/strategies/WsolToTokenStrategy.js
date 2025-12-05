@@ -13,9 +13,7 @@ export class WsolToTokenStrategy {
         const toLamports = (amt) => Math.round(amt * 1000000000);
         // Candidate SOL outflows from user wallet
         const userSolOuts = edges.filter((e) => e.mint === WSOL_MINT && (userWallets.includes(e.authority ?? "") || userTokenAccounts.has(e.source)));
-        console.log(userTokenAccounts);
-        console.log(edges);
-        // Candidate token inflows into user-owned accounts (authority ≠ userWallet to exclude self-transfers)
+        // Candidate token inflows into user-owned accounts 
         const userTokenIns = edges.filter((e) => e.mint !== WSOL_MINT && userTokenAccounts.has(e.destination) && !userWallets.includes(e.authority ?? ""));
         if (!userSolOuts.length || !userTokenIns.length)
             return [];

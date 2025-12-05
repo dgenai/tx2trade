@@ -5,6 +5,7 @@ export interface VisitContext {
     };
     depth: number;
     accountIndex: Map<string, TokAccInfo>;
+    currentIxIndex: number;
     pushEdge: (e: TransferEdge) => void;
     noteAccount: (addr: string, info: Partial<TokAccInfo>) => void;
     debug?: boolean;

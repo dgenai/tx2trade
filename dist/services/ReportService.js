@@ -24,7 +24,6 @@ async function fetchTokenMetadataBatch(mints) {
     }
     return results;
 }
-/** Convertit un TradeAction vers EnrichedAction, en normalisant les nombres. */
 function normalizeAction(input) {
     const txHash = String(input.transactionHash ?? "");
     const wallet = String(input.walletAddress ?? "");
@@ -50,7 +49,6 @@ function normalizeAction(input) {
         wallet,
         blockTime,
         type,
-        // Champs "génériques" laissés vides (non présents dans TradeAction)
         amount: undefined,
         tokenSymbol: undefined,
         tokenName: undefined,
@@ -88,10 +86,8 @@ export class ReportService {
     fmtAmt(n) {
         if (typeof n !== "number" || !Number.isFinite(n))
             return "—";
-        // lisible et précis : jusqu'à 6 décimales
         return n.toLocaleString(undefined, { maximumFractionDigits: 6 });
     }
-    /** Affiche uniquement nom/symbole + bouton copier (copie le mint si dispo, sinon le symbole). */
     tokenCell(symbol, name, mint) {
         const label = symbol || name || "—";
         const copyValue = mint || symbol || "";
@@ -118,7 +114,6 @@ export class ReportService {
             .map(([k, v]) => `<span class="chip">${this.esc(k)}: ${v}</span>`)
             .join("");
         const fmtDate = (unix) => unix ? new Date(unix * 1000).toLocaleString() : "—";
-        // Tri desc par date
         const sorted = [...actions].sort((a, b) => {
             const ta = a.blockTime ?? 0;
             const tb = b.blockTime ?? 0;
@@ -136,7 +131,6 @@ export class ReportService {
                 ? `https://solscan.io/tx/${this.esc(a.txHash)}`
                 : "#";
             const isBuy = (a.type || "").toUpperCase() === "BUY";
-            // Champs calculés selon BUY/SELL
             const tokenHtml = isBuy
                 ? this.tokenCell(a.boughtSymbol, a.boughtName, a.boughtMint)
                 : this.tokenCell(a.soldSymbol, a.soldName, a.soldMint);
@@ -217,10 +211,8 @@ export class ReportService {
             const boughtMint = a.boughtMint;
             const soldAmount = a.soldAmount ?? 0;
             const boughtAmount = a.boughtAmount ?? 0;
-            // Nodes : on enregistre tous les tokens vus comme sold / bought
             registerNode(soldMint, a.soldSymbol, a.soldName, t, "sold");
             registerNode(boughtMint, a.boughtSymbol, a.boughtName, t, "bought");
-            // Liens : uniquement quand les deux côtés sont présents (relation entre tokens)
             if (soldMint && boughtMint) {
                 const key = `${soldMint}__${boughtMint}__${t}`;
                 let link = linkMap.get(key);

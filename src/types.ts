@@ -49,6 +49,7 @@ export interface TransferEdge {
   authority?: string;  // Authority of the transfer (if available)
   programId?: string;  // Program responsible for the transfer
   depth?: number;      // Call depth (0 = top-level, 1 = inner)
+  ixIndex: number;
 }
 
 /**

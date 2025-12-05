@@ -11,6 +11,13 @@ type Options = {
     windowAroundIn?: number;
 };
 type EdgeTag = "fee" | "dust" | "normal" | "tip";
+/**
+ * Classify edges as fee / dust / normal / tip.
+ *
+ * This is a combined absolute + relative dust filter, and then
+ * a second pass that tries to identify fee/tip patterns per user wallet
+ * based on WSOL flows, checked/non-checked transfers, and small sinks.
+ */
 export declare function tagEdgesForFeesDust(edges: TransferEdge[], userWallets: string[], { minWsolLamports, dustRelPct, clusterWindowSeq, }: {
     minWsolLamports?: number;
     dustRelPct?: number;
@@ -25,10 +32,16 @@ export declare function attachFeesAndNetsToLegs({ tx, legs, edges, tags, userWal
     windowSeq?: number;
 }): void;
 /**
- * New engine:
- * - multi-pass
- * - no short-circuit (do not return on first match)
- * - consume used edges so subsequent strategies don’t reuse them
+ * Transaction → SwapLegs engine for the "SOLBridge" model.
+ *
+ * Responsibilities:
+ *  - Build token-transfer edges from a parsed transaction
+ *  - Add synthetic WSOL delta edges for user wallets
+ *  - Detect user token accounts
+ *  - Tag edges as fee/dust/normal/tip
+ *  - Run a strategy pipeline (AggregatorHub, ProxyVault, WSOL<->Token, etc.)
+ *    instruction by instruction (ixIndex-based)
+ *  - Attach fees and net amounts to the resulting legs
  */
 export declare function transactionToSwapLegs_SOLBridge(sig: string, tx: any, userWallets: string[], opts: Options): SwapLeg[];
 export {};

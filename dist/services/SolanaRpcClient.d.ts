@@ -47,6 +47,8 @@ export declare class SolanaRpcClient {
         before?: string;
         until?: string;
         commitment?: Commitment;
+        fromDate?: string;
+        toDate?: string;
     }): Promise<string[]>;
     private hasTransfer;
 }

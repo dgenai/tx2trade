@@ -8,23 +8,26 @@ import { STABLES } from "../constants.js";
 function getSolPriceAt(candles: any[], blockTime: number): number | null {
   if (!candles || candles.length === 0) return null;
 
-  const ts = Math.floor(blockTime / 60) * 60 * 1000; // round to minute start (ms)
+  // blockTime en secondes -> ms
+  const ts = blockTime * 1000;
 
-  const inRange = candles.find((c: any) => c.openTime <= ts && c.closeTime > ts);
-  if (inRange) return Number(inRange.close);
-
-  // fallback to nearest openTime
+  // Always pick the closest candle by openTime
   let nearest = candles[0];
   let best = Math.abs(nearest.openTime - ts);
+
   for (let i = 1; i < candles.length; i++) {
-    const d = Math.abs(candles[i].openTime - ts);
+    const c = candles[i];
+    const d = Math.abs(c.openTime - ts);
     if (d < best) {
       best = d;
-      nearest = candles[i];
+      nearest = c;
     }
   }
-  return nearest ? Number(nearest.close) : null;
+
+  const price = Number(nearest.close);
+  return Number.isFinite(price) ? price : null;
 }
+
 
 /**
  * Formats a numeric value as a plain decimal string (no scientific notation).
@@ -270,29 +273,50 @@ export function legsToTradeActions(
       continue;
     }
 
-    // Default token↔token = BUY (never swap)
+
+
+    let soldUnitUsd = "0";
+    let soldAmountUsd = "0";
+    let boughtUnitUsd = "0";
+    let boughtAmountUsd = "0";
+    let txType: "buy" | "sell" = "buy";
+
+    const soldCore = Number(leg.soldCore ?? 0); 
+    if (solPrice && Number.isFinite(solPrice) && soldCore > 0 && boughtAmt > 0) {
+      const totalUsd = soldCore * solPrice; 
+      const unitBought = totalUsd / boughtAmt; 
+
+      soldUnitUsd = safeUsd(solPrice);
+      soldAmountUsd = safeUsd(totalUsd);
+
+      boughtUnitUsd = safeUsd(unitBought);
+      boughtAmountUsd = safeUsd(totalUsd);
+    }
+
     actions.push({
       transactionDate: txDate,
       transactionHash: ctx.txHash,
-      transactionType: "buy",
+      transactionType: txType,
       walletAddress: wallet,
 
       sold: {
         address: leg.soldMint,
         amount: soldAmt,
-        unitPriceUsd: "0",
-        amountUsd: "0",
+        unitPriceUsd: soldUnitUsd,
+        amountUsd: soldAmountUsd,
       },
 
       bought: {
         address: leg.boughtMint,
         amount: boughtAmt,
-        unitPriceUsd: "0",
-        amountUsd: "0",
+        unitPriceUsd: boughtUnitUsd,
+        amountUsd: boughtAmountUsd,
       },
     });
+
   }
 
   log(`Built ${actions.length} actions`, actions);
+
   return actions;
 }

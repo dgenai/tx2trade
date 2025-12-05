@@ -5,17 +5,26 @@ export interface VisitContext {
     seq: { v: number };
     depth: number;
     accountIndex: Map<string, TokAccInfo>;
+
+    // NEW: index de l’instruction top-level en cours
+    currentIxIndex: number;
+
     pushEdge: (e: TransferEdge) => void;
     noteAccount: (addr: string, info: Partial<TokAccInfo>) => void;
     debug?: boolean;
     log?: (...args: any[]) => void;
-  
-    groups?: Array<{ index: number; startSeq: number; endSeq: number; outerProgramId?: string }>;
-  }
+
+    groups?: Array<{
+        index: number;
+        startSeq: number;
+        endSeq: number;
+        outerProgramId?: string;
+    }>;
+}
 
 export interface InstructionVisitor {
-  supports(ix: any): boolean;
-  visit(ix: any, ctx: VisitContext): void;
+    supports(ix: any): boolean;
+    visit(ix: any, ctx: VisitContext): void;
 }
 
 /**
@@ -32,36 +41,53 @@ export interface InstructionVisitor {
  */
 export function applyVisitors(tx: any, visitors: InstructionVisitor[], ctx: VisitContext) {
     const log = ctx.log ?? ((..._args: any[]) => {});
-  
-    // 1) top-level
-    for (const ix of tx?.transaction?.message?.instructions ?? []) {
-      const v = visitors.find((vv) => vv.supports(ix)) ?? visitors[visitors.length - 1];
-      log("Top-level instruction handled by", v.constructor?.name ?? "UnknownVisitor");
-      v.visit(ix, ctx);
-    }
-  
-    // 2) inner groups
+
+    // Fetch top-level instructions once
     const outers = tx?.transaction?.message?.instructions ?? [];
-    ctx.groups = ctx.groups ?? [];
-  
-    for (const inner of tx?.meta?.innerInstructions ?? []) {
-      const start = ctx.seq.v;
-      ctx.depth = 1;
-  
-      for (const ix of inner?.instructions ?? []) {
-        const v = visitors.find((vv) => vv.supports(ix)) ?? visitors[visitors.length - 1];
-        log("Inner instruction handled by", v.constructor?.name ?? "UnknownVisitor");
+
+    
+    // 1) TOP-LEVEL INSTRUCTIONS
+    for (let ixIndex = 0; ixIndex < outers.length; ixIndex++) {
+        const ix = outers[ixIndex];
+
+        ctx.depth = 0;
+
+        const v =
+            visitors.find((vv) => vv.supports(ix)) ??
+            visitors[visitors.length - 1];
+
+        log("Top-level instruction handled by", v.constructor?.name ?? "UnknownVisitor");
         v.visit(ix, ctx);
-      }
-  
-      const end = ctx.seq.v;
-      const outerIx = outers[inner.index];
-      ctx.groups.push({
-        index: inner.index,
-        startSeq: start,
-        endSeq: end,
-        outerProgramId: outerIx?.programId,
-      });
     }
-  }
-  
+
+    // 2) INNER INSTRUCTION GROUPS
+    ctx.groups = ctx.groups ?? [];
+
+    for (const inner of tx?.meta?.innerInstructions ?? []) {
+        const start = ctx.seq.v;
+
+        ctx.depth = 1;
+        ctx.currentIxIndex = inner.index;  // <-- TAG inner group: use parent outer index
+
+        for (const ix of inner?.instructions ?? []) {
+            const v =
+                visitors.find((vv) => vv.supports(ix)) ??
+                visitors[visitors.length - 1];
+
+            log("Inner instruction handled by", v.constructor?.name ?? "UnknownVisitor");
+            v.visit(ix, ctx);
+        }
+
+        const end = ctx.seq.v;
+        const outerIx = outers[inner.index];
+
+        ctx.groups.push({
+            index: inner.index,
+            startSeq: start,
+            endSeq: end,
+            outerProgramId: outerIx?.programId,
+        });
+
+        ctx.depth = 0; // RESET IMPORTANTE
+    }
+}

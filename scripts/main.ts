@@ -21,6 +21,9 @@ type CliFlags = {
   until?: string;
   commitment?: Commitment;
 
+  fromDate?: string; // (YYYY-MM-DD or ISO)
+  toDate?: string;   // (YYYY-MM-DD or ISO)
+
   help?: boolean;
   report?: boolean | string;
   out?: string;
@@ -33,12 +36,16 @@ function parseArgs(argv: string[]): { flags: CliFlags; positionals: string[] } {
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
 
-    if (a === "--help" || a === "-h") flags.help = true;
-    else if (a === "--sigs" || a === "-s") {
+    if (a === "--help" || a === "-h") {
+      flags.help = true;
+    } else if (a === "--sigs" || a === "-s") {
       const v = argv[++i];
-      if (v) flags.sigs = v.split(",").map(s => s.trim()).filter(Boolean);
-    } else if (a === "--address" || a === "-a") flags.address = argv[++i];
-    else if (a === "--limit" || a === "-l") {
+      if (v) {
+        flags.sigs = v.split(",").map(s => s.trim()).filter(Boolean);
+      }
+    } else if (a === "--address" || a === "-a") {
+      flags.address = argv[++i];
+    } else if (a === "--limit" || a === "-l") {
       const v = Number(argv[++i]);
       if (!Number.isNaN(v)) flags.limit = v;
     } else if (a === "--total") {
@@ -47,9 +54,15 @@ function parseArgs(argv: string[]): { flags: CliFlags; positionals: string[] } {
     } else if (a === "--pageSize") {
       const v = Number(argv[++i]);
       if (!Number.isNaN(v)) flags.pageSize = v;
-    } else if (a === "--before") flags.before = argv[++i];
-    else if (a === "--until") flags.until = argv[++i];
-    else if (a === "--commitment" || a === "-c") {
+    } else if (a === "--before") {
+      flags.before = argv[++i];
+    } else if (a === "--until") {
+      flags.until = argv[++i];
+    } else if (a === "--fromDate") {
+      flags.fromDate = argv[++i];
+    } else if (a === "--toDate") {
+      flags.toDate = argv[++i];
+    } else if (a === "--commitment" || a === "-c") {
       const v = argv[++i] as Commitment;
       if (v === "processed" || v === "confirmed" || v === "finalized") {
         flags.commitment = v;
@@ -61,7 +74,9 @@ function parseArgs(argv: string[]): { flags: CliFlags; positionals: string[] } {
       if (peek && !peek.startsWith("-")) {
         flags.report = peek;
         i++;
-      } else flags.report = true;
+      } else {
+        flags.report = true;
+      }
     } else if (a === "--out") {
       flags.out = argv[++i];
     } else if (a.startsWith("-")) {
@@ -79,20 +94,22 @@ function printHelp(): void {
 Usage:
   ts-node src/app/main.ts <sig1> [sig2 ...]
   ts-node src/app/main.ts --sigs sig1,sig2,sig3
-  ts-node src/app/main.ts --address <PUBKEY> [--total 3000] [--pageSize 1000] ...
+  ts-node src/app/main.ts --address <PUBKEY> [--total 3000] [--pageSize 1000] [--fromDate 2025-01-01] [--toDate 2025-01-31] ...
 
 Flags:
   -s, --sigs
   -a, --address
-  -l, --limit
-      --total
-      --pageSize
-      --before
-      --until
-  -c, --commitment
+  -l, --limit           (alias of --total)
+      --total           number of actions to return (address mode) or cap (sigs mode)
+      --pageSize        signatures per page in address mode
+      --before          signature cursor (RPC before)
+      --until           signature cursor (RPC until)
+      --fromDate        start date for address mode (YYYY-MM-DD or ISO)
+      --toDate          end date for address mode (YYYY-MM-DD or ISO)
+  -c, --commitment      processed | confirmed | finalized
   -h, --help
-  --report
-  --out
+  --report              optional HTML report (filename or boolean)
+  --out                 output file for report (default: solana-trades-report.html)
 `);
 }
 
@@ -100,7 +117,7 @@ Flags:
 // MAIN
 // ----------------------------------------------------------------------------
 async function main() {
-  const RPC_ENDPOINT = process.env.RPC_ENDPOINT!;
+  const RPC_ENDPOINT = process.env.RPC_ENDPOINT;
   if (!RPC_ENDPOINT) throw new Error("RPC_ENDPOINT is missing");
 
   const { flags, positionals } = parseArgs(process.argv.slice(2));
@@ -110,7 +127,7 @@ async function main() {
   }
 
   // Determine signatures from flags or positionals
-  let sigs: string[] | undefined =
+  const sigs: string[] | undefined =
     flags.sigs?.length ? flags.sigs : positionals.length ? positionals : undefined;
 
   // Build unified input for tx2trade()
@@ -123,6 +140,8 @@ async function main() {
     pageSize: flags.pageSize,
     before: flags.before,
     until: flags.until,
+    fromDate: flags.fromDate,
+    toDate: flags.toDate,
 
     debug: false,
     windowTotalFromOut: 500,
@@ -150,7 +169,9 @@ async function main() {
 
   // Copy JSON result → clipboard
   try {
-   
+    const json = JSON.stringify(enriched, null, 2);
+    await clipboardy.write(json);
+    console.log(`📋 Copied ${enriched.length} actions to clipboard.`);
   } catch {
     console.warn("⚠️ Could not write to clipboard.");
   }
@@ -172,6 +193,6 @@ async function main() {
   }
 }
 
-main().catch((err) => {
+main().catch(err => {
   console.error("❌ Unhandled error in main():", err);
 });

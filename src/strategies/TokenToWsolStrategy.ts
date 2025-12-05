@@ -47,7 +47,7 @@ export class TokenToWsolStrategy implements LegStrategy {
       windowTotalFromOut = 400,
       windowAroundIn = 200,
       debug = false,
-      log = () => {},
+      log = () => { },
       tags,
       aggregateOuts = false,
     } = opts ?? {};
@@ -93,9 +93,10 @@ export class TokenToWsolStrategy implements LegStrategy {
     for (const inn of ins) {
       // Try to resolve the receiving wallet for this WSOL inflow:
       // - if destination is a wallet address, use it
-      // - if destination is only a token account, we would need an ATA→wallet map (not available here)
+      // - if destination is only a token account, we would need an ATA→wallet map
       const receiverWallet =
-        userWallets.find((w) => w === inn.destination) ?? undefined;
+        userWallets.find((w) => w === inn.destination) ??
+        (userTokenAccounts.has(inn.destination ?? "") ? inn.destination ?? "" : "");
 
       // Without a receiver wallet, we cannot safely match in multi-wallet mode
       if (!receiverWallet) {
@@ -110,12 +111,13 @@ export class TokenToWsolStrategy implements LegStrategy {
 
       if (typeof windowAroundIn === "number") {
         // Symmetric window around the WSOL IN
-        windowOuts = outs.filter(
-          (o) =>
-            !usedOut.has(o.seq) &&
-            Math.abs(o.seq - inn.seq) <= windowAroundIn &&
-            o.authority === receiverWallet
-        );
+        windowOuts = outs.filter((o) => {
+          if (usedOut.has(o.seq)) return false;
+          if (Math.abs(o.seq - inn.seq) > windowAroundIn) return false;
+          return true;
+        });
+
+
       } else {
         // Look-back window only
         windowOuts = outs.filter((o) => {
@@ -125,6 +127,8 @@ export class TokenToWsolStrategy implements LegStrategy {
           return d <= windowTotalFromOut && o.authority === receiverWallet;
         });
       }
+
+
 
       if (!windowOuts.length) {
         dbg("No matching OUTs for IN", {
@@ -146,8 +150,8 @@ export class TokenToWsolStrategy implements LegStrategy {
         const userWallet =
           windowOuts.length > 0
             ? windowOuts.reduce((a, b) =>
-                a.amount >= b.amount ? a : b
-              ).authority || ""
+              a.amount >= b.amount ? a : b
+            ).authority || ""
             : receiverWallet;
 
         legs.push({

@@ -5,9 +5,9 @@
  * over any arbitrary time range, with automatic pagination, deduplication,
  * retry/backoff on 429/5xx, and conversion into typed objects.
  *
- * ⚙️ Requirements: Node.js 18+ (native fetch) or install `undici`/`node-fetch`.
+ *  Requirements: Node.js 18+ (native fetch) or install `undici`/`node-fetch`.
  *
- * ✅ Usage example:
+ *  Usage example:
  *    const svc = new BinanceKlinesService({ market: 'spot' });
  *    const data = await svc.fetchKlinesRange({
  *      symbol: 'SOLUSDT',
