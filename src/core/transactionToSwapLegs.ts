@@ -552,23 +552,24 @@ export function transactionToSwapLegs_SOLBridge(
         continue;
       }
 
-      const accepted: SwapLeg[] = [];
+      const allSeqs = new Set<number>();
+      let invalid = false;
 
       for (const leg of legs) {
         const seqs = (leg.path ?? []).map((e: any) => e.seq);
-        if (!seqs.length) continue;
-        if (seqs.some(s => used.has(s))) continue;
-        accepted.push(leg);
-        seqs.forEach(s => used.add(s));
+        if (!seqs.length) { invalid = true; break; }
+        for (const s of seqs) allSeqs.add(s);
       }
 
-      if (!accepted.length) {
-        log(`Strategy ${name} produced legs but they overlapped; skipped.`);
+      if (invalid || [...allSeqs].some(s => used.has(s))) {
+        log(`Strategy ${name} produced legs but they overlapped with used; skipped.`);
         continue;
       }
 
-      allLegs.push(...accepted);
-      log(`✔ ${name}: accepted ${accepted.length} leg(s) for ix ${ixIndex}`);
+      for (const s of allSeqs) used.add(s);
+
+      allLegs.push(...legs);
+      log(`✔ ${name}: accepted ${legs.length} leg(s) for ix ${ixIndex}`);
     }
   }
 

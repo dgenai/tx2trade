@@ -12,9 +12,11 @@ export class AggregatorHubStrategy implements LegStrategy {
     opts?: { debug?: boolean; log?: (...args: any[]) => void }
   ): SwapLeg[] {
     const debug = opts?.debug ?? false;
-    const log = opts?.log ?? (() => {});
+    const log = opts?.log ?? (() => { });
     const dbg = (...msg: any[]) => debug && log("[AggregatorHub]", ...msg);
-
+    console.log("edge", edges);
+    console.log("userTokenAccounts", userTokenAccounts);
+    console.log("userWallets", userWallets);
     if (!edges.length) return [];
 
     const sorted = [...edges].sort((a, b) => a.seq - b.seq);
@@ -144,13 +146,24 @@ export class AggregatorHubStrategy implements LegStrategy {
         const MIN_SOL_PIVOT = 1e-7;
 
         if (solPivot > MIN_SOL_PIVOT) {
+
+
+          const sellPath = sorted.filter(e =>
+            e.mint === s.mint || e.mint === WSOL_MINT
+          );
+
+          const buyPath = sorted.filter(e =>
+            e.mint === b.mint || e.mint === WSOL_MINT
+          );
+
+
           const legSell: SwapLeg = {
             soldMint: s.mint,
             soldAmount: s.out,
             boughtMint: WSOL_MINT,
             boughtAmount: solPivot,
             userWallet,
-            path: sorted,
+            path: sellPath,
           };
 
           const legBuy: SwapLeg = {
@@ -159,7 +172,7 @@ export class AggregatorHubStrategy implements LegStrategy {
             boughtMint: b.mint,
             boughtAmount: b.in,
             userWallet,
-            path: sorted,
+            path: buyPath,
           };
 
           dbg("WSOL pivot decomposition (TOKEN→WSOL→TOKEN)", {
