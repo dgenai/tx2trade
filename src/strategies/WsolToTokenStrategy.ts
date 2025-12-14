@@ -29,21 +29,23 @@ export class WsolToTokenStrategy implements LegStrategy {
       minLamportsToSum = 50_000,
     } = opts ?? {};
 
-   
     // Internal debug logger
     const dbg = (...a: any[]) => { if (debug) log(`[${this.name}]`, ...a); };
     // Convert SOL to lamports (1e9 multiplier, rounded)
     const toLamports = (amt: number) => Math.round(amt * 1_000_000_000);
 
+ 
     // Candidate SOL outflows from user wallet
     const userSolOuts = edges.filter(
       (e) => e.mint === WSOL_MINT && (userWallets.includes(e.authority ?? "") || userTokenAccounts.has(e.source))
     );
 
+
     // Candidate token inflows into user-owned accounts 
     const userTokenIns = edges.filter(
       (e) => e.mint !== WSOL_MINT && userTokenAccounts.has(e.destination) && !userWallets.includes(e.authority ?? "")
     );
+     
     if (!userSolOuts.length || !userTokenIns.length) return [];
 
     const legs: SwapLeg[] = [];
@@ -51,6 +53,8 @@ export class WsolToTokenStrategy implements LegStrategy {
 
     for (const inn of userTokenIns) {
       let candidates: TransferEdge[] = [];
+
+      
 
       if (windowAroundIn !== undefined) {
         // Simple symmetric window around IN (preferred if configured)
@@ -70,6 +74,8 @@ export class WsolToTokenStrategy implements LegStrategy {
         // Prefer "before" if present, else fallback to "after"
         candidates = before.length ? before : after;
       }
+
+     
 
       if (!candidates.length || usedIn.has(inn.seq)) continue;
 

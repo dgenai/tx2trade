@@ -10,7 +10,7 @@ import { TokenToWsolStrategy } from "../strategies/TokenToWsolStrategy.js";
 import { WalletToWalletTokenTransferStrategy } from "../strategies/WalletToWalletTokenTransferStrategy.js";
 import { ProxyVaultSwapStrategy } from "../strategies/ProxyVaultSwapStrategy.js";
 
-import { WSOL_DECIMALS, WSOL_MINT } from "../constants.js";
+import { WSOL_DECIMALS, WSOL_MINT, TOKEN_PROGRAM_ID } from "../constants.js";
 import { pushUserSolDeltaEdge } from "../parsing/solDeltas.js";
 
 type Options = {
@@ -74,16 +74,40 @@ export function tagEdgesForFeesDust(
   const tags = new Map<number, EdgeTag>();
   const maxByMint = new Map<string, number>();
 
-  // -----------------------------------------
+  // -------------------------------------------------
+  // Helper: lamports
+  // -------------------------------------------------
+  const toLamports = (e: TransferEdge): number =>
+    e.mint === WSOL_MINT ? Math.round(e.amount * 10 ** WSOL_DECIMALS) : 0;
+
+  // -------------------------------------------------
+  // Helper: detect WSOL swap core (CRITICAL)
+  // -------------------------------------------------
+  const isSwapCoreWSOL = (e: TransferEdge): boolean => {
+    if (e.mint !== WSOL_MINT) return false;
+    if (!userWallets.includes(e.authority ?? "")) return false;
+
+    const lam = toLamports(e);
+    if (lam < minWsolLamports) return false;
+
+    // Must have a nearby token IN
+    return edges.some(
+      x =>
+        x.mint !== WSOL_MINT &&
+        Math.abs(x.seq - e.seq) <= 30
+    );
+  };
+
+  // -------------------------------------------------
   // 1) Compute max flow per mint
-  // -----------------------------------------
+  // -------------------------------------------------
   for (const e of edges) {
     maxByMint.set(e.mint, Math.max(maxByMint.get(e.mint) ?? 0, e.amount));
   }
 
-  // -----------------------------------------
+  // -------------------------------------------------
   // 2) Initial dust classification
-  // -----------------------------------------
+  // -------------------------------------------------
   for (const e of edges) {
     const isDustAbsWsol =
       e.mint === WSOL_MINT && toLamports(e) < minWsolLamports;
@@ -93,11 +117,14 @@ export function tagEdgesForFeesDust(
     tags.set(e.seq, isDustAbsWsol || isDustRel ? "dust" : "normal");
   }
 
-  // ============================================================
-  // 3) Per-wallet fee/tip detection
-  // ============================================================
+  // =================================================
+  // 3) Per-wallet fee / tip detection
+  // =================================================
   for (const userWallet of userWallets) {
-    // --- 3a: WSOL debits signed by THIS wallet (clustered fee pattern) ---
+
+    // -------------------------------------------------
+    // 3a) WSOL clustered equal debits (true fee pattern)
+    // -------------------------------------------------
     const wsolUser = edges
       .filter(e => e.mint === WSOL_MINT && e.authority === userWallet)
       .sort((a, b) => a.seq - b.seq);
@@ -122,39 +149,25 @@ export function tagEdgesForFeesDust(
       }
     }
 
-    // --- 3b: Non-checked WSOL → tip/fee classification (per wallet) ---
-    const wsolNonChecked = edges
-      .filter(
-        (e: any) =>
-          e.mint === WSOL_MINT &&
-          e.authority === userWallet &&
-          e.checked === false
-      )
-      .sort((a, b) => a.seq - b.seq);
+    // -------------------------------------------------
+    // 3b) Small WSOL debits (tips / router fees)
+    // -------------------------------------------------
+    for (const e of edges) {
+      if (e.mint !== WSOL_MINT) continue;
+      if (e.authority !== userWallet) continue;
+      if (isSwapCoreWSOL(e)) continue; // 🔒 PROTECTION
 
-    const hasSignificantCheckedNearby = (baseSeq: number) =>
-      edges.some(
-        (e: any) =>
-          e.mint === WSOL_MINT &&
-          e.authority === userWallet &&
-          e.checked === true &&
-          Math.abs(e.seq - baseSeq) <= 60 &&
-          toLamports(e) >= 300_000
-      );
-
-    for (const e of wsolNonChecked) {
       const lam = toLamports(e);
-
-      if (hasSignificantCheckedNearby(e.seq)) {
-        tags.set(e.seq, "fee");
-      } else if (lam > 0 && lam <= 2_000_000) {
+      if (lam > 0 && lam <= 2_000_000) {
         tags.set(e.seq, "tip");
       } else if (lam > 0 && lam <= 10_000_000) {
         tags.set(e.seq, "fee");
       }
     }
 
-    // --- 3c: WSOL clustering around token IN (per wallet) ---
+    // -------------------------------------------------
+    // 3c) WSOL clustering around token IN
+    // -------------------------------------------------
     const tokenIns = edges
       .filter(e => e.mint !== WSOL_MINT && e.authority !== userWallet)
       .sort((a, b) => a.seq - b.seq);
@@ -168,17 +181,23 @@ export function tagEdgesForFeesDust(
       );
       if (!outs.length) continue;
 
-      // Core = largest WSOL out in the cluster, the rest are tips/fees.
+      // Core = largest WSOL out
       let core = outs[0];
       for (const o of outs) {
         if (toLamports(o) > toLamports(core)) core = o;
       }
+
+      // 🔒 Force core as normal
       tags.set(core.seq, "normal");
 
       for (const o of outs) {
         if (o.seq === core.seq) continue;
-        const cur = tags.get(o.seq);
-        if (cur === "fee" || cur === "tip") continue;
+
+        // 🔒 Never downgrade a swap core
+        if (isSwapCoreWSOL(o)) {
+          tags.set(o.seq, "normal");
+          continue;
+        }
 
         const lam = toLamports(o);
         if (lam <= 2_000_000) tags.set(o.seq, "tip");
@@ -186,7 +205,9 @@ export function tagEdgesForFeesDust(
       }
     }
 
-    // --- 3d: small token sinks (per wallet) ---
+    // -------------------------------------------------
+    // 3d) Small token sinks (unchanged)
+    // -------------------------------------------------
     for (const e of edges) {
       if (e.mint === WSOL_MINT) continue;
       if (tags.get(e.seq) !== "normal") continue;
@@ -218,8 +239,18 @@ export function tagEdgesForFeesDust(
     }
   }
 
+  // -------------------------------------------------
+  // 4) FINAL SAFETY PASS — NEVER tag swap core as fee
+  // -------------------------------------------------
+  for (const e of edges) {
+    if (isSwapCoreWSOL(e)) {
+      tags.set(e.seq, "normal");
+    }
+  }
+
   return tags;
 }
+
 
 export function attachFeesAndNetsToLegs({
   tx,

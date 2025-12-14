@@ -67,7 +67,7 @@ export interface SwapLeg {
   userWallet: string,
   
   // Decomposed SOL flows (in SOL units)
-  soldCore?: number;       // Core SOL outflow (bonding curve only)
+  soldCore?: number;       // Core SOL outflow 
   routerFees?: number;     // Router/aggregator fees
   tip?: number;            // Jito/priority tips
   transfersOnly?: number;  // Core + routerFees + tip

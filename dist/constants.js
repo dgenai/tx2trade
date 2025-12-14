@@ -6,6 +6,7 @@ export const STABLES = new Set([
     "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", // USDC
     "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB", // USDT
 ]);
+export const TOKEN_PROGRAM_ID = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
 export const WSOL_DECIMALS = 9;
 export const LAMPORTS_PER_SOL = 1000000000;
 //# sourceMappingURL=constants.js.map

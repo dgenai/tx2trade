@@ -5,6 +5,7 @@ import { legsToTradeActions } from "./core/actions.js";
 import { inferUserWallets } from "./core/inferUserWallet.js";
 import { TradeAction } from "./types.js";
 import { exit } from "node:process";
+import {buildTradeWindows} from './utils/helpers.js'
 
 type BuildFromAddressInput = {
   rpc: SolanaRpcClient;
@@ -82,6 +83,29 @@ async function fetchCandlesForBlockTimeRange(
 
   await Promise.all(Array.from({ length: concurrency }, () => worker()));
 
+  return results.flat().sort((a, b) => a.openTime - b.openTime);
+}
+
+async function fetchCandlesForTrades(blockTimes: number[]) {
+  const svc = new BinanceKlinesService({ market: "spot" });
+
+  const windows = buildTradeWindows(
+    blockTimes,
+    60_000,   // 1m
+    30,       // before
+    30        // after
+  );
+
+  const tasks = windows.map(w =>
+    svc.fetchKlinesRange({
+      symbol: "SOLUSDT",
+      interval: "1m",
+      startTimeMs: w.startMs,
+      endTimeMs: w.endMs,
+    })
+  );
+
+  const results = await Promise.all(tasks);
   return results.flat().sort((a, b) => a.openTime - b.openTime);
 }
 
@@ -206,7 +230,8 @@ export async function buildActionsFromAddress(
   // Fetch Binance candles for the date range
   let candles: any[] = [];
   if (minBlockTime !== undefined && maxBlockTime !== undefined) {
-    candles = await fetchCandlesForBlockTimeRange(minBlockTime, maxBlockTime);
+    //candles = await fetchCandlesForBlockTimeRange(minBlockTime, maxBlockTime);
+    candles = await fetchCandlesForTrades(parsed.map(p => p.blockTime));
   } else if (debug) {
     console.warn("buildActionsFromAddress: no valid blockTime for candles");
   }

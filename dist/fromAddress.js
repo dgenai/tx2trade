@@ -2,6 +2,7 @@ import { BinanceKlinesService } from "./services/BinanceKlinesService.js";
 import { transactionToSwapLegs_SOLBridge } from "./core/transactionToSwapLegs.js";
 import { legsToTradeActions } from "./core/actions.js";
 import { inferUserWallets } from "./core/inferUserWallet.js";
+import { buildTradeWindows } from './utils/helpers.js';
 function buildWindows(startTimeMs, endTimeMs, intervalMs = 60000, maxCandles = 1500) {
     const maxSpan = intervalMs * maxCandles;
     const windows = [];
@@ -36,6 +37,21 @@ async function fetchCandlesForBlockTimeRange(minBlockTime, maxBlockTime) {
         }
     }
     await Promise.all(Array.from({ length: concurrency }, () => worker()));
+    return results.flat().sort((a, b) => a.openTime - b.openTime);
+}
+async function fetchCandlesForTrades(blockTimes) {
+    const svc = new BinanceKlinesService({ market: "spot" });
+    const windows = buildTradeWindows(blockTimes, 60000, // 1m
+    30, // before
+    30 // after
+    );
+    const tasks = windows.map(w => svc.fetchKlinesRange({
+        symbol: "SOLUSDT",
+        interval: "1m",
+        startTimeMs: w.startMs,
+        endTimeMs: w.endMs,
+    }));
+    const results = await Promise.all(tasks);
     return results.flat().sort((a, b) => a.openTime - b.openTime);
 }
 export async function buildActionsFromAddress(input) {
@@ -137,7 +153,8 @@ export async function buildActionsFromAddress(input) {
     // Fetch Binance candles for the date range
     let candles = [];
     if (minBlockTime !== undefined && maxBlockTime !== undefined) {
-        candles = await fetchCandlesForBlockTimeRange(minBlockTime, maxBlockTime);
+        //candles = await fetchCandlesForBlockTimeRange(minBlockTime, maxBlockTime);
+        candles = await fetchCandlesForTrades(parsed.map(p => p.blockTime));
     }
     else if (debug) {
         console.warn("buildActionsFromAddress: no valid blockTime for candles");
