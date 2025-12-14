@@ -7,6 +7,9 @@ export class AggregatorHubStrategy {
         const debug = opts?.debug ?? false;
         const log = opts?.log ?? (() => { });
         const dbg = (...msg) => debug && log("[AggregatorHub]", ...msg);
+        console.log("edge", edges);
+        console.log("userTokenAccounts", userTokenAccounts);
+        console.log("userWallets", userWallets);
         if (!edges.length)
             return [];
         const sorted = [...edges].sort((a, b) => a.seq - b.seq);
@@ -105,13 +108,15 @@ export class AggregatorHubStrategy {
                 const solPivot = estimateSolPivotFromEdges();
                 const MIN_SOL_PIVOT = 1e-7;
                 if (solPivot > MIN_SOL_PIVOT) {
+                    const sellPath = sorted.filter(e => e.mint === s.mint || e.mint === WSOL_MINT);
+                    const buyPath = sorted.filter(e => e.mint === b.mint || e.mint === WSOL_MINT);
                     const legSell = {
                         soldMint: s.mint,
                         soldAmount: s.out,
                         boughtMint: WSOL_MINT,
                         boughtAmount: solPivot,
                         userWallet,
-                        path: sorted,
+                        path: sellPath,
                     };
                     const legBuy = {
                         soldMint: WSOL_MINT,
@@ -119,7 +124,7 @@ export class AggregatorHubStrategy {
                         boughtMint: b.mint,
                         boughtAmount: b.in,
                         userWallet,
-                        path: sorted,
+                        path: buyPath,
                     };
                     dbg("WSOL pivot decomposition (TOKEN→WSOL→TOKEN)", {
                         legSell,
